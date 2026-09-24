@@ -21,4 +21,11 @@ ffmpeg -loglevel error -y -i $f/still-xbox.png -i $f/still-playstation.png -i $f
   -filter_complex "[0]scale=640:-1[a];[1]scale=640:-1[b];[2]scale=640:-1[c];[a][b][c]hstack=3" -q:v 3 $o/controllers.jpg
 ffmpeg -loglevel error -y -i $f/message-0.png -i $f/message-1.png -i $f/message-2.png \
   -filter_complex "[0]crop=1300:130:310:0[a];[1]crop=1300:130:310:0[b];[2]crop=1300:130:310:0[c];[a][b][c]vstack=3,scale=900:-1" -q:v 3 $o/messages.jpg
-ls -la $o
+
+# A short tour video (MP4, H.264): the same scenes, 1280x720, fading between them.
+v=docs/videos; mkdir -p $v
+clip() { ffmpeg -loglevel error -y -framerate 15 -i "$1/%04d.png" -vf "scale=1280:720:flags=lanczos,fps=30,fade=in:d=0.4,reverse,fade=in:d=0.4,reverse,format=yuv420p" -c:v libx264 -crf 24 -preset slow "$tmp/$2.mp4"; }
+clip $f/takeover 1; clip $f/launch 2; clip $f/hold 3; clip $f/volume 4; clip $f/rewind 5
+printf "file '%s'\n" $tmp/{1,2,3,4,5}.mp4 > $tmp/list.txt
+ffmpeg -loglevel error -y -f concat -safe 0 -i $tmp/list.txt -c copy -movflags +faststart $v/console-mode-tour.mp4
+ls -la $o $v
