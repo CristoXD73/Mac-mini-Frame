@@ -64,5 +64,11 @@ require_wine() {
   [ -x "$(cx_bin)/wine" ] || die "CrossOver's wine not found at $(cx_bin)/wine. Is CrossOver installed in /Applications? (override with CX_APP=...)"
 }
 
-# Is a process matching the pattern running?
-proc_running() { pgrep -f "$1" >/dev/null 2>&1; }
+# Wine rewrites a process's command line to its Windows path, e.g.
+#   C:\Program Files (x86)\Steam\steam.exe -silent
+# so anchor on that shape; a loose `pgrep -f steam` would also match shells,
+# editors and greps that merely mention the name.
+win_proc_re() { printf '^[A-Za-z]:\\\\.*\\\\%s( |$)' "$1"; }
+
+# proc_running EXE_REGEX, e.g. proc_running 'steam\.exe'
+proc_running() { pgrep -f "$(win_proc_re "$1")" >/dev/null 2>&1; }

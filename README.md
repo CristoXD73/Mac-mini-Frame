@@ -114,7 +114,7 @@ Launch logs are saved to `<bottle>/steam-tune-launch.log`.
 The code is plain bash that runs on macOS's stock bash 3.2 with BSD awk/sed. Nothing needs to be installed.
 
 ```bash
-bash tests/run.sh                                   # 54 tests, fake CrossOver install
+bash tests/run.sh                                   # 57 tests, fake CrossOver install
 shellcheck -x -e SC2012 bin/steam-tune lib/*.sh tests/run.sh
 ```
 

@@ -165,6 +165,18 @@ assert_contains "launch invokes wine with bottle" "$calls" "--bottle Steam C:\\P
 assert_contains "launch passes profile flags" "$calls" "-cef-disable-gpu "
 
 st --bottle Nope doctor >/dev/null 2>&1; assert_eq "missing bottle fails" "$?" "1"
+
+# Process detection: a shell merely mentioning steamwebhelper/steam.exe must
+# not count as Steam running; a Wine-style C:\...\steam.exe process must.
+bash -c 'sleep 3; : C:\\\\x\\\\steamwebhelper.exe steam.exe' & decoy=$!
+st apply >/dev/null 2>&1; assert_eq "apply ignores unrelated cmdlines" "$?" "0"
+kill "$decoy" 2>/dev/null; wait "$decoy" 2>/dev/null
+bash -c 'exec -a "C:\\Program Files (x86)\\Steam\\steam.exe" sleep 3' & fake=$!
+sleep 0.3
+out="$(st apply 2>&1)"; assert_contains "apply refuses while steam.exe runs" "$out" "Steam is running"
+st kill >/dev/null 2>&1
+if kill -0 "$fake" 2>/dev/null; then fail "kill stops steam.exe"; kill "$fake"; else pass "kill stops steam.exe"; fi
+wait "$fake" 2>/dev/null
 teardown
 
 printf '\n%d passed, %d failed\n' "$PASS" "$FAIL"

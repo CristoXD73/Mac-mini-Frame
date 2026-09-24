@@ -130,7 +130,7 @@ cmd_doctor() {
     fi
   fi
 
-  if proc_running 'steamwebhelper'; then
+  if proc_running 'steamwebhelper\.exe'; then
     info ""; info "== Running steamwebhelper processes"
     webhelper_stats | sed 's/^/   /'
   fi
@@ -184,7 +184,7 @@ cmd_apply() {
   case "$backend" in ""|auto|d3dmetal|dxmt|dxvk|wined3d) ;; *) die "apply: bad --backend '$backend'" ;; esac
 
   require_bottle
-  if proc_running 'steam\.exe' || proc_running 'steamwebhelper'; then
+  if proc_running 'steam\.exe' || proc_running 'steamwebhelper\.exe'; then
     die "Steam is running. Quit it first (or: steam-tune kill)."
   fi
 
@@ -264,7 +264,7 @@ cmd_restore() {
   fi
   src="$(backup_dir)/$name"
   [ -f "$src/cxbottle.conf" ] || die "Backup '$name' not found."
-  if proc_running 'steam\.exe' || proc_running 'steamwebhelper'; then
+  if proc_running 'steam\.exe' || proc_running 'steamwebhelper\.exe'; then
     die "Steam is running. Quit it first (or: steam-tune kill)."
   fi
   run cp -p "$src/cxbottle.conf" "$(bottle_conf)"
@@ -336,14 +336,14 @@ cmd_launch() {
 
 cmd_kill() {
   local p
-  for p in 'steamwebhelper' 'steam\.exe' 'gameoverlayui' 'steamservice\.exe'; do
-    if proc_running "$p"; then run pkill -f "$p" || true; fi
+  for p in 'steamwebhelper\.exe' 'steam\.exe' 'gameoverlayui\.exe' 'steamservice\.exe'; do
+    if proc_running "$p"; then run pkill -f "$(win_proc_re "$p")" || true; fi
   done
   # Give Wine a moment, then force anything left.
   if [ "${DRY_RUN:-0}" != 1 ]; then
     sleep 2
-    for p in 'steamwebhelper' 'steam\.exe'; do
-      if proc_running "$p"; then pkill -9 -f "$p" || true; fi
+    for p in 'steamwebhelper\.exe' 'steam\.exe'; do
+      if proc_running "$p"; then pkill -9 -f "$(win_proc_re "$p")" || true; fi
     done
   fi
   ok "Steam processes stopped."
@@ -354,7 +354,7 @@ cmd_kill() {
 webhelper_stats() {
   # %CPU and RSS(KB) summed across all steamwebhelper processes.
   ps -Ao pcpu=,rss=,command= 2>/dev/null | awk '
-    /steamwebhelper/ && !/awk/ { n++; cpu += $1; rss += $2 }
+    $3 ~ /^[A-Za-z]:\\/ && /\\steamwebhelper\.exe/ { n++; cpu += $1; rss += $2 }
     END { printf "procs=%d cpu=%.1f%% rss=%.0fMB\n", n, cpu, rss / 1024 }'
 }
 
@@ -367,7 +367,7 @@ cmd_bench() {
     esac
     shift
   done
-  proc_running steamwebhelper || die "steamwebhelper isn't running — start Steam first."
+  proc_running 'steamwebhelper\.exe' || die "steamwebhelper isn't running — start Steam first."
   info "Sampling steamwebhelper for ${secs}s. Scroll the library / open Big Picture meanwhile."
   while [ "$i" -lt "$secs" ]; do
     line="$(webhelper_stats)"
