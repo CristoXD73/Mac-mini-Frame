@@ -2,20 +2,41 @@ name: CI
 on: [push, pull_request]
 
 jobs:
-  test:
-    strategy:
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+  macos:
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
-      # On macOS this is Apple's stock bash 3.2 + BSD awk/sed/stat — the same
-      # tools mac-mini-frame gets on a user's Mac.
-      - name: Tests (/bin/bash)
-        run: TEST_BASH=/bin/bash /bin/bash tests/run.sh
+      - name: Toolchain
+        run: sw_vers && swiftc --version && python3 --version
+      - name: Build Console Mode.app
+        run: ./build.sh --no-install
+      - name: Inspect bundle
+        run: |
+          app="build/Console Mode.app"
+          plutil -lint "$app/Contents/Info.plist"
+          codesign -d -r- "$app" 2>&1 | grep 'identifier "local.consolemode"'
+          ls -la "$app/Contents/MacOS" "$app/Contents/Resources"
+          "$app/Contents/Resources/bottle-windows" || echo "bottle-windows: no game window (expected)"
+      - name: Build tools
+        run: |
+          swiftc tools/hidprobe.swift -o /tmp/hidprobe
+          swiftc -parse-as-library -swift-version 5 tools/render-preview.swift src/Common.swift \
+            src/Takeover.swift src/Input.swift -o /tmp/preview
+      - name: Render takeover preview
+        run: /tmp/preview takeover-frames.jpg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: takeover-preview
+          path: takeover-frames.jpg
+      - name: Script tests
+        run: |
+          python3 -m unittest discover -s tests -p 'test_*.py' -v
+          bash tests/test_scripts.sh
 
-  shellcheck:
+  linux-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: shellcheck -x -e SC2012 bin/mac-mini-frame lib/*.sh tests/run.sh install.sh macos/*.command
+      - run: sudo apt-get install -y zsh
+      - run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - run: bash tests/test_scripts.sh

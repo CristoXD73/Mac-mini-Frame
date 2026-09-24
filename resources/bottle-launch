@@ -1,0 +1,65 @@
+#!/bin/zsh
+# Target of every Mac Steam tile. Runs a game inside the CrossOver bottle and
+# only returns once its window has closed, so Mac Steam shows "playing" for the
+# whole session.
+#
+#   bottle-launch steam <appid>          game from the bottle's Steam
+#   bottle-launch exe "/path/game.exe"   any Windows exe
+emulate -L zsh
+setopt no_unset pipe_fail
+
+here=${0:A:h}
+WINE=${CM_WINE:-/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine}
+BOTTLE=${CM_BOTTLE_NAME:-Steam}
+BOTTLE_DIR=${CM_BOTTLE:-$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE}
+WINDOWS=${CM_BOTTLE_WINDOWS:-$here/bottle-windows}
+LOG=${CM_LOG:-$HOME/Library/Logs/ConsoleMode.log}
+START_TIMEOUT=${CM_START_TIMEOUT:-180}   # seconds to wait for a game window
+GONE_SECS=${CM_GONE_SECS:-6}             # window must be gone this long
+POLL=${CM_POLL:-1}
+
+log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [bottle-launch] $*" >> $LOG 2>/dev/null }
+die() { log "error: $*"; print -r -- "bottle-launch: $*" >&2; exit 1 }
+
+(( $# == 2 )) || die "usage: bottle-launch steam <appid> | exe <path>"
+kind=$1 target=$2
+[[ -x $WINE ]] || die "wine not found at $WINE"
+
+case $kind in
+  steam)
+    [[ $target == <-> ]] || die "appid must be a number: $target"
+    steam_exe='C:\Program Files (x86)\Steam\steam.exe'
+    [[ -f "$BOTTLE_DIR/drive_c/Program Files (x86)/Steam/steam.exe" ]] || \
+      steam_exe='C:\Program Files\Steam\steam.exe'
+    log "launch steam app $target"
+    $WINE --bottle $BOTTLE $steam_exe -silent -applaunch $target >>$LOG 2>&1 &!
+    ;;
+  exe)
+    [[ -f $target ]] || die "no such file: $target"
+    log "launch exe $target"
+    $WINE --bottle $BOTTLE --workdir ${target:h} $target >>$LOG 2>&1 &!
+    ;;
+  *) die "unknown kind: $kind" ;;
+esac
+
+# 1. Wait for the game's window.
+waited=0 owner=''
+while (( waited < START_TIMEOUT )); do
+  owner=$($WINDOWS 2>/dev/null)
+  [[ -n $owner ]] && break
+  sleep $POLL; (( waited += POLL ))
+done
+if [[ -z $owner ]]; then
+  log "no game window after ${START_TIMEOUT}s — giving up"
+  exit 2
+fi
+log "game window up: $owner"
+
+# 2. Wait until no game window has been seen for GONE_SECS in a row.
+gone=0
+while (( gone < GONE_SECS )); do
+  sleep $POLL
+  if [[ -n $($WINDOWS 2>/dev/null) ]]; then gone=0; else (( gone += POLL )); fi
+done
+log "game closed: $owner"
+exit 0
