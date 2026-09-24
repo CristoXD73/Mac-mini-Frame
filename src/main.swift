@@ -298,8 +298,11 @@ for sig in [SIGTERM, SIGINT, SIGHUP] {
     }
 }
 
-let app = NSApplication.shared
-let controller = Controller()
-app.delegate = controller
-app.setActivationPolicy(.accessory)
-app.run()
+// Top-level code runs on the main thread, but isn't main-actor isolated.
+MainActor.assumeIsolated {
+    let app = NSApplication.shared
+    let controller = Controller()
+    app.delegate = controller  // weak; `controller` lives until run() returns
+    app.setActivationPolicy(.accessory)
+    app.run()
+}
