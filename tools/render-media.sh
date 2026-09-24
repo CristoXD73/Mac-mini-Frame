@@ -12,8 +12,8 @@ gif() {  # gif <frames dir> <out> <filter> [dither]
   ffmpeg -loglevel error -y -framerate 15 -i "$1/%04d.png" -vf "$3,split[a][b];[a]palettegen=max_colors=192:stats_mode=diff[p];[b][p]paletteuse=dither=${4:-sierra2_4a}:diff_mode=rectangle" -loop 0 "$2"
 }
 gif $f/takeover $o/takeover.gif  "fps=12,scale=640:-1:flags=lanczos" "bayer:bayer_scale=4"
-gif $f/hold     $o/hold-to-exit.gif "crop=1000:560:460:230,scale=640:-1:flags=lanczos"
-gif $f/volume   $o/volume.gif    "crop=760:180:1160:0,scale=560:-1:flags=lanczos"
+gif $f/hold     $o/hold-to-exit.gif "crop=1000:880:460:190,scale=600:-1:flags=lanczos" "bayer:bayer_scale=4"
+gif $f/volume   $o/volume.gif    "crop=760:500:1160:0,scale=520:-1:flags=lanczos"
 gif $f/launch   $o/launch.gif    "scale=800:-1:flags=lanczos"
 gif $f/rewind   $o/rewind.gif    "scale=800:-1:flags=lanczos"
 ffmpeg -loglevel error -y -i $f/now-playing.png -q:v 3 $o/now-playing.jpg
