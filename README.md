@@ -1,11 +1,13 @@
 <div align="center">
 
-# 🎮 Mac-mini-Frame · Console Mode
+<img src="docs/images/icon-256.png" width="128" alt="Console Mode icon">
+
+# Mac-mini-Frame · Console Mode
 
 **Turn your Mac into a game console you run with a controller.**
 Press the Xbox button and your Mac becomes a console. Hold it to get your desktop back.
 
-[![CI](https://github.com/CristoXD73/Pergolas/actions/workflows/ci.yml/badge.svg?branch=claude/steam-console-macos-perf-4lbx1k)](https://github.com/CristoXD73/Pergolas/actions/workflows/ci.yml)
+[![CI](https://github.com/CristoXD73/Mac-mini-Frame/actions/workflows/ci.yml/badge.svg?branch=claude/steam-console-macos-perf-4lbx1k)](https://github.com/CristoXD73/Mac-mini-Frame/actions/workflows/ci.yml)
 ![macOS 15+](https://img.shields.io/badge/macOS-15%2B-000?logo=apple)
 ![Apple silicon](https://img.shields.io/badge/Apple%20silicon-M1%E2%80%93M6-0a84ff)
 ![Swift](https://img.shields.io/badge/Swift-SwiftUI-F05138?logo=swift&logoColor=white)
@@ -13,7 +15,7 @@ Press the Xbox button and your Mac becomes a console. Hold it to get your deskto
 
 <img src="docs/images/takeover.gif" width="720" alt="Game mode starting: a starfield and the controller outline on an extra display">
 
-**[▶ Watch the 25-second tour (MP4)](docs/videos/console-mode-tour.mp4)** · [Install](#-install-in-one-line) · [Controls](#-controls) · [Add games](#-adding-windows-games) · [Performance tips](#-performance-tips)
+**[▶ Watch the 25-second video tour](https://cristoxd73.github.io/Mac-mini-Frame/)** · [Install](#-install-in-one-line) · [Controls](#-controls) · [Add games](#-adding-windows-games) · [Performance tips](#-performance-tips)
 
 </div>
 
@@ -50,7 +52,7 @@ It recognizes your controller and draws its outline:
 
 <img src="docs/images/controllers.jpg" alt="Xbox, PlayStation and Steam controller outlines">
 
-<sub>The game shown here, "Skyline Drift", is made up. Every image and the video are rendered from the app's own views with <code>tools/render-media.sh</code>.</sub>
+<sub>The game shown here, "Skyline Drift", is made up. Every image and the video are rendered from the app's own views with <code>tools/render-media.sh</code> (the icon with <code>tools/render-icon.sh</code>).</sub>
 
 ---
 
@@ -59,7 +61,7 @@ It recognizes your controller and draws its outline:
 Open **Terminal** and paste:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/CristoXD73/Mac-mini-Frame/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh
 ```
 
 That downloads the code to `~/Mac-mini-Frame`, builds it on your Mac, installs **Console Mode** in `/Applications` and starts it in the background. Run the same line again to update.
@@ -135,7 +137,7 @@ It shows up in Big Picture › Library › **Non-Steam**. Other useful commands:
 
 Measured on a Mac mini, with CrossOver and Game Porting Toolkit 4:
 
-- **In the game, choose DLSS** (Performance or Balanced), **not XeSS or FSR.** CrossOver turns DLSS into Apple's own **MetalFX** upscaler. *Clair Obscur: Expedition 33* had the GPU pinned at **100%** with XeSS, even on Low. Switching the upscaler dropped it to **~69%** within a second.
+- **In the game, choose DLSS** (Performance or Balanced), **not XeSS or FSR.** CrossOver turns DLSS into Apple's own **MetalFX** upscaler. *Clair Obscur: Expedition 33* had the GPU pinned at **100%** with XeSS, even on Low. Switching away from XeSS dropped it to **~69%** within a second.
 - **Bottle settings:** D3DMetal graphics, **MSync** on, **DLSS** on. These match Andrew Tsai's and CodeWeavers' guides.
 - **Frame generation:** leave it off if you see tearing.
 - **Games on an external drive** load slower (USB hard drives: ~2 ms per random read vs ~0.2 ms internal) but play the same once loaded.
@@ -173,7 +175,7 @@ See [Performance tips](#-performance-tips). The upscaler setting inside the game
 ## 🧹 Uninstall
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/uninstall.sh | zsh
+curl -fsSL https://raw.githubusercontent.com/CristoXD73/Mac-mini-Frame/claude/steam-console-macos-perf-4lbx1k/uninstall.sh | zsh
 ```
 
 - **Removes:** the app, its background helpers, and only the Steam tiles it added.
@@ -216,6 +218,7 @@ Add `-s -- --purge` to the line above to also delete internal-drive backups, set
 ./build.sh --no-install  # build only
 zsh tests/test_scripts.sh
 ./tools/render-media.sh  # regenerate the README images and video (needs ffmpeg)
+./tools/render-icon.sh   # regenerate the app icon and social card
 ```
 
 - [`docs/HANDOFF.md`](docs/HANDOFF.md): design, every hard-won finding, setup and test status

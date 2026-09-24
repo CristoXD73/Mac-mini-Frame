@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mac-mini-Frame · Console Mode: turn your Mac into a game console</title>
+<meta name="description" content="Free macOS app that turns a Mac mini or any Apple silicon Mac into a controller-driven game console: press the Xbox button for Steam Big Picture, play Windows games through CrossOver and Game Porting Toolkit, hold to return to the desktop.">
+<meta name="keywords" content="mac gaming, mac mini console, steam big picture mac, crossover, game porting toolkit, gptk, d3dmetal, xbox controller mac, couch gaming, apple silicon gaming, console mode">
+<link rel="icon" href="images/icon-256.png">
+<link rel="apple-touch-icon" href="images/icon-256.png">
+<meta property="og:title" content="Mac-mini-Frame: turn your Mac into a game console">
+<meta property="og:description" content="Press the Xbox button: apps pause, Steam Big Picture opens, Windows games run through CrossOver. Hold it to get your desktop back.">
+<meta property="og:image" content="https://cristoxd73.github.io/Mac-mini-Frame/images/social.png">
+<meta property="og:url" content="https://cristoxd73.github.io/Mac-mini-Frame/">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root { --bg:#050a1c; --card:#0c1533; --line:rgba(255,255,255,.1); --text:#eef2ff; --dim:rgba(238,242,255,.62); --accent:#8fb4ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:radial-gradient(1200px 700px at 50% -10%, #13235a 0%, var(--bg) 60%); background-color:var(--bg); color:var(--text);
+         font:17px/1.55 -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif; }
+  main { max-width:1040px; margin:0 auto; padding:56px 16px 80px; }
+  header { text-align:center; }
+  header img.icon { width:132px; height:132px; filter:drop-shadow(0 12px 30px rgba(80,120,255,.35)); }
+  h1 { font:700 clamp(36px,6vw,58px)/1.1 ui-rounded, -apple-system, sans-serif; margin:18px 0 10px; letter-spacing:-.5px; }
+  .tag { font-size:clamp(18px,2.4vw,22px); color:var(--dim); margin:0 auto 28px; max-width:640px; }
+  .buttons { display:flex; gap:12px; justify-content:center; flex-wrap:wrap; }
+  .btn { display:inline-block; padding:12px 22px; border-radius:999px; text-decoration:none; font-weight:600; color:#061032; background:var(--accent); }
+  .btn.ghost { background:transparent; color:var(--text); border:1px solid var(--line); }
+  video { display:block; width:100%; margin:44px 0 12px; border-radius:18px; border:1px solid var(--line); box-shadow:0 30px 80px rgba(0,0,0,.5); background:#000; }
+  .caption { text-align:center; color:var(--dim); font-size:14px; }
+  h2 { font:700 30px/1.2 ui-rounded, -apple-system, sans-serif; margin:64px 0 20px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:16px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:16px; padding:20px; }
+  .card b { display:block; margin-bottom:6px; }
+  .card span { color:var(--dim); font-size:15px; }
+  .shots { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; }
+  .shots figure { margin:0; background:var(--card); border:1px solid var(--line); border-radius:16px; overflow:hidden; }
+  .shots img { width:100%; display:block; }
+  .shots figcaption { padding:10px 14px; color:var(--dim); font-size:14px; }
+  pre { background:#020615; border:1px solid var(--line); border-radius:12px; padding:16px; overflow-x:auto; font-size:14px; }
+  code { font-family:ui-monospace, "SF Mono", Menlo, monospace; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  td { padding:10px 8px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:first-child { white-space:nowrap; font-weight:600; }
+  footer { margin-top:64px; text-align:center; color:var(--dim); font-size:14px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img class="icon" src="images/icon-256.png" alt="Console Mode app icon">
+    <h1>Turn your Mac into a game console</h1>
+    <p class="tag">Press the Xbox button: your apps pause, Steam Big Picture opens, and Windows games run through CrossOver. Hold it to get your desktop back.</p>
+    <div class="buttons">
+      <a class="btn" href="#install">Install in one line</a>
+      <a class="btn ghost" href="https://github.com/CristoXD73/Mac-mini-Frame">View on GitHub</a>
+    </div>
+  </header>
+
+  <video src="videos/console-mode-tour.mp4" poster="images/social.png" autoplay muted loop playsinline controls></video>
+  <p class="caption">The 25-second tour: game mode starting, launching a game, holding Xbox to exit, volume, Save Rewind.</p>
+
+  <h2>What it does</h2>
+  <div class="grid">
+    <div class="card"><b>🕹️ One button to play</b><span>Apps pause and hide, and Big Picture is ready in about a second.</span></div>
+    <div class="card"><b>🖥️ Every screen joins in</b><span>Extra displays show a starfield or a Now Playing card. The main screen stays yours.</span></div>
+    <div class="card"><b>🍷 Windows games as tiles</b><span>CrossOver games show up in Big Picture with cover art and a smooth hand-off.</span></div>
+    <div class="card"><b>⏸️ Quick Resume</b><span>Xbox + X freezes the game at 0% CPU and brings it back exactly where you were.</span></div>
+    <div class="card"><b>⏪ Save Rewind</b><span>Save snapshots while you play. Roll back, and undo the rollback.</span></div>
+    <div class="card"><b>🛟 Safe by design</b><span>A watchdog always wakes paused apps, even if something crashes.</span></div>
+  </div>
+
+  <h2>See it</h2>
+  <div class="shots">
+    <figure><img src="images/hold-to-exit.gif" alt="Exit ring" loading="lazy"><figcaption>Hold Xbox 6 s to return to the desktop</figcaption></figure>
+    <figure><img src="images/launch.gif" alt="Launch screen" loading="lazy"><figcaption>Launching a Windows game</figcaption></figure>
+    <figure><img src="images/rewind.gif" alt="Save Rewind" loading="lazy"><figcaption>Save Rewind (Xbox + LB)</figcaption></figure>
+    <figure><img src="images/now-playing.jpg" alt="Now Playing" loading="lazy"><figcaption>Now Playing on extra displays</figcaption></figure>
+  </div>
+
+  <h2 id="install">Install</h2>
+  <p>Open Terminal and paste:</p>
+  <pre><code>curl -fsSL https://raw.githubusercontent.com/CristoXD73/Mac-mini-Frame/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh</code></pre>
+  <p>Needs macOS 15+, <a href="https://store.steampowered.com/about/">Steam for Mac</a>, and <a href="https://www.codeweavers.com/crossover">CrossOver</a> (a bottle named <code>Steam</code>) for Windows games. Then, in System Settings › Game Controllers, set your controller's Home button to open <b>Console Mode</b>. <a href="https://github.com/CristoXD73/Mac-mini-Frame#-install-in-one-line">Full setup →</a></p>
+
+  <h2>Controls</h2>
+  <table>
+    <tr><td>Xbox</td><td>Game mode</td></tr>
+    <tr><td>Hold Xbox 6 s</td><td>Back to the desktop</td></tr>
+    <tr><td>Xbox + D-pad ↑↓</td><td>Volume</td></tr>
+    <tr><td>Xbox + Y</td><td>Performance overlay</td></tr>
+    <tr><td>Xbox + View</td><td>Screenshot</td></tr>
+    <tr><td>Xbox + X</td><td>Quick Resume</td></tr>
+    <tr><td>Xbox + Menu + View ×2</td><td>Force quit</td></tr>
+    <tr><td>Xbox + LB</td><td>Save Rewind</td></tr>
+  </table>
+
+  <h2>Performance tip</h2>
+  <p>In CrossOver games, pick <b>DLSS</b> in the game's settings instead of XeSS. CrossOver turns DLSS into Apple's MetalFX. On a Mac mini, XeSS alone kept the GPU at 100% in <i>Clair Obscur: Expedition 33</i>. Switching away from it dropped GPU load to about 69%.</p>
+
+  <footer>Mac-mini-Frame · Console Mode · <a href="https://github.com/CristoXD73/Mac-mini-Frame">GitHub</a> · Not affiliated with Apple, Valve, Microsoft or CodeWeavers.</footer>
+</main>
+</body>
+</html>

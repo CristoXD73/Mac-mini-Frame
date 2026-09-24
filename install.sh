@@ -2,13 +2,13 @@
 # Install Mac-mini-Frame (Console Mode) on this Mac.
 #
 #   From a checkout:  ./install.sh
-#   One line:         curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh
+#   One line:         curl -fsSL https://raw.githubusercontent.com/CristoXD73/Mac-mini-Frame/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh
 #
 # Builds Console Mode from source, installs it to /Applications, and starts it in the background.
 # Safe to run again to update.
 set -euo pipefail
 
-REPO="https://github.com/CristoXD73/Pergolas.git"
+REPO="https://github.com/CristoXD73/Mac-mini-Frame.git"
 BRANCH="claude/steam-console-macos-perf-4lbx1k"
 SRC="${CM_SRC:-$HOME/Mac-mini-Frame}"
 

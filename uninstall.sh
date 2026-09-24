@@ -3,7 +3,7 @@
 #
 #   From a checkout:  ./uninstall.sh            (keeps your save backups)
 #                     ./uninstall.sh --purge    (also deletes internal-drive save backups, settings and logs)
-#   One line:         curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/uninstall.sh | zsh
+#   One line:         curl -fsSL https://raw.githubusercontent.com/CristoXD73/Mac-mini-Frame/claude/steam-console-macos-perf-4lbx1k/uninstall.sh | zsh
 #
 # Never touches your games, your CrossOver bottle, your own Steam shortcuts, or the game's own save files.
 set -uo pipefail

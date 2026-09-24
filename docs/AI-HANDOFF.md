@@ -8,7 +8,7 @@ State of the repo as of 2026-09-24 (second update), and what to do next. Read it
 
 | | |
 |---|---|
-| Repo | https://github.com/CristoXD73/Pergolas (project name: **Mac-mini-Frame**) |
+| Repo | https://github.com/CristoXD73/Mac-mini-Frame (project name: **Mac-mini-Frame**) |
 | Visibility | **Public.** Never commit usernames, account IDs, local IPs, keys or tokens |
 | Branch | **`claude/steam-console-macos-perf-4lbx1k`** (also the default branch). No force-pushes, no PRs unless the owner asks |
 | Install / uninstall | one-liners in the README (`install.sh`, `uninstall.sh` at the repo root) |
