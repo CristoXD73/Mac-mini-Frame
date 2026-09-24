@@ -1,0 +1,21 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [macos-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      # On macOS this is Apple's stock bash 3.2 + BSD awk/sed/stat — the same
+      # tools steam-tune gets on a user's Mac.
+      - name: Tests (/bin/bash)
+        run: TEST_BASH=/bin/bash /bin/bash tests/run.sh
+
+  shellcheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: shellcheck -x -e SC2012 bin/steam-tune lib/*.sh tests/run.sh install.sh macos/*.command
