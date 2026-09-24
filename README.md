@@ -51,6 +51,7 @@ python3 "$R/add-game" --list
 | `tools/` | `hidprobe.swift` (raw controller buttons), `render-preview.swift` (takeover frames to JPEG), `cdp.js`/`prof.js` (Big Picture fps over DevTools) |
 | `tests/` | Tests for the scripts using a fake bottle, fake Mac Steam and fake wine |
 | `docs/HANDOFF.md` | The full design, hard-won findings, and what is and isn't verified |
+| `docs/AI-HANDOFF.md` | Current status, repo access, and next steps for whoever picks this up |
 
 ## Tests
 
