@@ -32,7 +32,7 @@ cx_bottles()   { printf '%s' "${CX_BOTTLES:-$HOME/Library/Application Support/Cr
 bottle_name()  { printf '%s' "${STEAM_BOTTLE:-Steam}"; }
 bottle_dir()   { printf '%s/%s' "$(cx_bottles)" "$(bottle_name)"; }
 bottle_conf()  { printf '%s/cxbottle.conf' "$(bottle_dir)"; }
-backup_dir()   { printf '%s/.steam-tune-backups' "$(bottle_dir)"; }
+backup_dir()   { printf '%s/.mac-mini-frame-backups' "$(bottle_dir)"; }
 
 # Prints the steam.exe path inside the bottle, or fails.
 steam_exe() {
@@ -56,7 +56,7 @@ steam_exe_win() {
 cx_wine() { run "$(cx_bin)/wine" --bottle "$(bottle_name)" "$@"; }
 
 require_bottle() {
-  [ -d "$(bottle_dir)" ] || die "Bottle '$(bottle_name)' not found in $(cx_bottles). Use --bottle NAME (run 'steam-tune doctor' to list bottles)."
+  [ -d "$(bottle_dir)" ] || die "Bottle '$(bottle_name)' not found in $(cx_bottles). Use --bottle NAME (run 'mac-mini-frame doctor' to list bottles)."
   [ -f "$(bottle_conf)" ] || die "No cxbottle.conf in $(bottle_dir) — is this a CrossOver bottle?"
 }
 

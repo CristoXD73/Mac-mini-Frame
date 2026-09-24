@@ -22,7 +22,7 @@ FLAGS_RESCUE="-cef-disable-gpu -cef-disable-gpu-compositing -cef-disable-d3d11 -
 
 # stock: no tweaks at all (for A/B comparison).
 
-# shellcheck disable=SC2034  # used by bin/steam-tune
+# shellcheck disable=SC2034  # used by bin/mac-mini-frame
 PROFILES="lite nogpu rescue stock"
 
 # profile_flags NAME -> prints flags, returns 1 on unknown profile

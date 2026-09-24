@@ -1,6 +1,6 @@
 #!/bin/bash
-# steam-tune — make Steam (desktop client and Big Picture) run smoothly inside
-# a CrossOver bottle on macOS. Run `steam-tune help` for usage.
+# Mac-mini-Frame — make Steam (desktop client and Big Picture) run smoothly
+# inside a CrossOver bottle on macOS. Run `mac-mini-frame help` for usage.
 set -eu
 
 VERSION="0.1.0"
@@ -26,9 +26,9 @@ MACDRV_REG='HKCU\Software\Wine\Mac Driver'
 
 usage() {
   cat <<EOF
-steam-tune $VERSION — speed up Steam in a CrossOver bottle on macOS
+Mac-mini-Frame $VERSION — speed up Steam in a CrossOver bottle on macOS
 
-Usage: steam-tune [--bottle NAME] [--dry-run] COMMAND [options]
+Usage: mac-mini-frame [--bottle NAME] [--dry-run] COMMAND [options]
 
 Commands:
   doctor                 Check macOS, CrossOver, the bottle and Steam; list issues.
@@ -49,7 +49,7 @@ Commands:
                          compare profiles objectively.
   kill                   Force-quit Steam and steamwebhelper in the bottle.
   restore [BACKUP]       Undo the last 'apply'; 'restore original' returns the
-                         bottle to how it was before steam-tune ever touched it.
+                         bottle to how it was before mac-mini-frame ever touched it.
   backups                List backups.
   help                   Show this help.
 
@@ -113,7 +113,7 @@ cmd_doctor() {
   if steam_exe >/dev/null; then ok "Steam installed: $(steam_exe_win)"; else err "steam.exe not found in bottle"; issues=$((issues + 1)); fi
 
   v="$(cxconf_get "$(bottle_conf)" EnvironmentVariables WINEMSYNC || true)"
-  if [ "$v" = 1 ]; then ok "MSync enabled"; else warn "MSync off (steam-tune apply enables it)"; issues=$((issues + 1)); fi
+  if [ "$v" = 1 ]; then ok "MSync enabled"; else warn "MSync off (mac-mini-frame apply enables it)"; issues=$((issues + 1)); fi
   v="$(cxconf_get "$(bottle_conf)" EnvironmentVariables WINEDEBUG || true)"
   if [ "$v" = "-all" ]; then ok "Wine debug logging off"; else warn "Wine debug logging not disabled (costs CPU)"; issues=$((issues + 1)); fi
   v="$(cxconf_get "$(bottle_conf)" EnvironmentVariables CX_GRAPHICS_BACKEND || true)"
@@ -136,7 +136,7 @@ cmd_doctor() {
   fi
 
   info ""
-  if [ "$issues" -eq 0 ]; then ok "No issues found."; else warn "$issues issue(s). Quit Steam, then run: steam-tune apply"; fi
+  if [ "$issues" -eq 0 ]; then ok "No issues found."; else warn "$issues issue(s). Quit Steam, then run: mac-mini-frame apply"; fi
   info ""
   dim "Also do once inside Steam (Settings):"
   dim "  Library   > Low Performance Mode: ON, Low Bandwidth Mode: ON, Community content: OFF"
@@ -185,7 +185,7 @@ cmd_apply() {
 
   require_bottle
   if proc_running 'steam\.exe' || proc_running 'steamwebhelper\.exe'; then
-    die "Steam is running. Quit it first (or: steam-tune kill)."
+    die "Steam is running. Quit it first (or: mac-mini-frame kill)."
   fi
 
   # The first backup is also kept as "original" so repeated applies can
@@ -220,7 +220,7 @@ cmd_apply() {
   fi
 
   info ""
-  ok "Done. Launch with: steam-tune launch   (or --bigpicture)"
+  ok "Done. Launch with: mac-mini-frame launch   (or --bigpicture)"
 }
 
 backup_to() {
@@ -265,7 +265,7 @@ cmd_restore() {
   src="$(backup_dir)/$name"
   [ -f "$src/cxbottle.conf" ] || die "Backup '$name' not found."
   if proc_running 'steam\.exe' || proc_running 'steamwebhelper\.exe'; then
-    die "Steam is running. Quit it first (or: steam-tune kill)."
+    die "Steam is running. Quit it first (or: mac-mini-frame kill)."
   fi
   run cp -p "$src/cxbottle.conf" "$(bottle_conf)"
   if [ -f "$src/user.reg" ]; then run cp -p "$src/user.reg" "$(bottle_dir)/user.reg"; fi
@@ -321,7 +321,7 @@ cmd_launch() {
   fi
 
   flags="$(build_flags)"
-  log="$(bottle_dir)/steam-tune-launch.log"
+  log="$(bottle_dir)/mac-mini-frame-launch.log"
   info "Launching Steam ($PROFILE${UI:+, $UI}) in bottle '$(bottle_name)'"
   dim "flags: $flags"
   # Intentional word splitting of $flags.
@@ -382,7 +382,7 @@ cmd_bench() {
   printf '\n'
   ok "$(awk -v s="$cpu_sum" -v n="$secs" -v m="$cpu_max" -v r="$rss_max" \
         'BEGIN{printf "avg CPU %.1f%%, peak CPU %.1f%%, peak RAM %dMB", s/n, m, r}')"
-  dim "Lower is better. Compare: steam-tune launch --fresh --profile lite|nogpu|stock"
+  dim "Lower is better. Compare: mac-mini-frame launch --fresh --profile lite|nogpu|stock"
 }
 
 # --- main ------------------------------------------------------------------
@@ -391,7 +391,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --bottle) [ $# -ge 2 ] || die "--bottle needs a name"; STEAM_BOTTLE="$2"; export STEAM_BOTTLE; shift 2 ;;
     --dry-run|-n) DRY_RUN=1; export DRY_RUN; shift ;;
-    --version|-V) echo "steam-tune $VERSION"; exit 0 ;;
+    --version|-V) echo "mac-mini-frame $VERSION"; exit 0 ;;
     *) break ;;
   esac
 done

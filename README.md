@@ -1,6 +1,6 @@
-# steam-tune: fix laggy Steam in CrossOver on macOS
+# Mac-mini-Frame: fix laggy Steam in CrossOver on macOS
 
-Steam running in a CrossOver bottle on a Mac often feels slow: menus stutter, scrolling the library lags, Big Picture drops frames, and `steamwebhelper.exe` stops responding. `steam-tune` is a small command-line tool that tunes the bottle and starts Steam with settings that fix most of this. It works with both the desktop client and Big Picture (the controller/console UI).
+Steam running in a CrossOver bottle on a Mac often feels slow: menus stutter, scrolling the library lags, Big Picture drops frames, and `steamwebhelper.exe` stops responding. Mac-mini-Frame is a small command-line tool (`mac-mini-frame`) that tunes the bottle and starts Steam with settings that fix most of this. It works with both the desktop client and Big Picture (the controller/console UI).
 
 ## Why Steam lags under CrossOver
 
@@ -10,22 +10,22 @@ Steam's interface is a web browser: it runs on **steamwebhelper.exe**, which is 
 Chromium -> ANGLE -> Direct3D 11 -> (wined3d | DXMT | D3DMetal) -> Metal
 ```
 
-Each layer adds latency, and the path is buggy under Wine. You get stutter, blank or black menus, and a UI drawn at 2x size. Rendering the UI in software is faster in practice, because it skips every translation layer, and a Steam menu is simple enough for the CPU. `steam-tune` also removes other overhead: Wine debug logging, MSync being off, Retina mode quadrupling the pixel count, and startup file checks.
+Each layer adds latency, and the path is buggy under Wine. You get stutter, blank or black menus, and a UI drawn at 2x size. Rendering the UI in software is faster in practice, because it skips every translation layer, and a Steam menu is simple enough for the CPU. `mac-mini-frame` also removes other overhead: Wine debug logging, MSync being off, Retina mode quadrupling the pixel count, and startup file checks.
 
 **Your games are not affected.** These changes only apply to the Steam client UI. Games still use the GPU through D3DMetal, DXMT or DXVK.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/cristoxd73/pergolas.git steam-tune
-cd steam-tune
-./install.sh                      # puts `steam-tune` in ~/.local/bin
+git clone https://github.com/CristoXD73/Pergolas.git Mac-mini-Frame
+cd Mac-mini-Frame
+./install.sh                      # puts `mac-mini-frame` in ~/.local/bin
 
-steam-tune doctor                 # find your bottle name and see what's wrong
+mac-mini-frame doctor                 # find your bottle name and see what's wrong
 # Quit Steam (Steam > Exit), then:
-steam-tune apply                  # tune the bottle (makes a backup first)
-steam-tune launch                 # start Steam with the low-lag profile
-steam-tune launch --bigpicture    # ...or go straight into Big Picture
+mac-mini-frame apply                  # tune the bottle (makes a backup first)
+mac-mini-frame launch                 # start Steam with the low-lag profile
+mac-mini-frame launch --bigpicture    # ...or go straight into Big Picture
 ```
 
 If your bottle is not called `Steam`, add `--bottle "My Bottle"` to every command, or run `export STEAM_BOTTLE="My Bottle"`.
@@ -34,7 +34,7 @@ To launch without Terminal, double-click **`macos/Steam Big Picture.command`** o
 
 ## What `apply` changes
 
-Before changing anything, `apply` backs up `cxbottle.conf` and the bottle registry (`user.reg`). `steam-tune restore` undoes the last apply. `steam-tune restore original` puts the bottle back to how it was before steam-tune first touched it.
+Before changing anything, `apply` backs up `cxbottle.conf` and the bottle registry (`user.reg`). `mac-mini-frame restore` undoes the last apply. `mac-mini-frame restore original` puts the bottle back to how it was before mac-mini-frame first touched it.
 
 | Change | Where | Why |
 |---|---|---|
@@ -56,7 +56,7 @@ Optional flags:
 
 ## Launch profiles
 
-`steam-tune launch --profile NAME` (run `steam-tune flags --profile NAME` to see the exact flags):
+`mac-mini-frame launch --profile NAME` (run `mac-mini-frame flags --profile NAME` to see the exact flags):
 
 | Profile | Use when |
 |---|---|
@@ -67,15 +67,15 @@ Optional flags:
 
 All profiles except `stock` also skip Steam's startup file checks and bootstrap updates (`-noverifyfiles -nobootstrapupdate -skipinitialbootstrap -norepairfiles`). Steam still updates itself when an update is actually needed.
 
-To launch from CrossOver's own launcher instead: run `steam-tune flags --bigpicture`, then paste the output after `steam.exe` in the launcher's Command field.
+To launch from CrossOver's own launcher instead: run `mac-mini-frame flags --bigpicture`, then paste the output after `steam.exe` in the launcher's Command field.
 
 ## Compare profiles on your Mac
 
 ```bash
-steam-tune launch --fresh --profile stock
-steam-tune bench --seconds 30        # use Steam normally while it samples
-steam-tune launch --fresh --profile lite
-steam-tune bench --seconds 30
+mac-mini-frame launch --fresh --profile stock
+mac-mini-frame bench --seconds 30        # use Steam normally while it samples
+mac-mini-frame launch --fresh --profile lite
+mac-mini-frame bench --seconds 30
 ```
 
 `bench` samples the CPU and RAM that all `steamwebhelper` processes use, and reports the average and peak. Lower is better. `--fresh` quits a running Steam first, which is needed because flags only take effect when Steam starts.
@@ -101,13 +101,13 @@ These are stored in your Steam account config, so change them in Steam's Setting
 
 | Symptom | Fix |
 |---|---|
-| Steam window is black or blank | `steam-tune launch --fresh --profile nogpu` |
-| "steamwebhelper is not responding" | `steam-tune kill`, then `steam-tune launch --profile rescue` |
-| Steam UI is tiny or blurry after `apply` | That's Retina mode being off. Run `steam-tune restore` and then `steam-tune apply --keep-retina` |
-| A game broke after `apply` | Try `steam-tune apply --no-msync`, or `steam-tune restore original` |
-| Anything else | `steam-tune restore original` undoes everything |
+| Steam window is black or blank | `mac-mini-frame launch --fresh --profile nogpu` |
+| "steamwebhelper is not responding" | `mac-mini-frame kill`, then `mac-mini-frame launch --profile rescue` |
+| Steam UI is tiny or blurry after `apply` | That's Retina mode being off. Run `mac-mini-frame restore` and then `mac-mini-frame apply --keep-retina` |
+| A game broke after `apply` | Try `mac-mini-frame apply --no-msync`, or `mac-mini-frame restore original` |
+| Anything else | `mac-mini-frame restore original` undoes everything |
 
-Launch logs are saved to `<bottle>/steam-tune-launch.log`.
+Launch logs are saved to `<bottle>/mac-mini-frame-launch.log`.
 
 ## Development
 
@@ -115,7 +115,7 @@ The code is plain bash that runs on macOS's stock bash 3.2 with BSD awk/sed. Not
 
 ```bash
 bash tests/run.sh                                   # 57 tests, fake CrossOver install
-shellcheck -x -e SC2012 bin/steam-tune lib/*.sh tests/run.sh
+shellcheck -x -e SC2012 bin/mac-mini-frame lib/*.sh tests/run.sh
 ```
 
 CI runs the tests on `macos-latest` (Apple's real `/bin/bash`) and on Ubuntu.

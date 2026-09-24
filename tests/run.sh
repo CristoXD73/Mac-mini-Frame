@@ -1,12 +1,12 @@
 #!/bin/bash
-# Test suite for steam-tune. Builds a fake CrossOver install and bottle in a
+# Test suite for mac-mini-frame. Builds a fake CrossOver install and bottle in a
 # temp dir (with a stub `wine` that records calls and writes registry values),
 # so it runs anywhere — including CI on macOS with the stock bash 3.2.
 set -u
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
-TOOL="$ROOT/bin/steam-tune"
+TOOL="$ROOT/bin/mac-mini-frame"
 # TEST_BASH lets CI/devs run the tool under a specific bash (e.g. 3.2).
 st() { "${TEST_BASH:-bash}" "$TOOL" "$@"; }
 export NO_COLOR=1
@@ -104,7 +104,7 @@ profile_flags bogus >/dev/null; assert_eq "unknown profile fails" "$?" "1"
 
 # --------------------------------------------------------------------- CLI
 setup
-out="$(st help)"; assert_contains "help works" "$out" "Usage: steam-tune"
+out="$(st help)"; assert_contains "help works" "$out" "Usage: mac-mini-frame"
 out="$(st flags --bigpicture)"
 assert_contains "flags bigpicture" "$out" "-gamepadui"
 assert_contains "flags default profile lite" "$out" "-cef-disable-d3d11"
@@ -134,7 +134,7 @@ calls="$(cat "$CX_BOTTLES/wine-calls.log")"
 assert_contains "apply disables GPU webviews" "$calls" 'reg add HKCU\Software\Valve\Steam /v GPUAccelWebViewsV3 /t REG_DWORD /d 0 /f'
 assert_contains "apply disables smooth scroll" "$calls" "SmoothScrollWebViews"
 assert_contains "apply disables retina" "$calls" "RetinaMode /t REG_SZ /d n"
-assert_eq "apply made backup + original" "$(ls "$B/.steam-tune-backups" | wc -l | tr -d ' ')" "2"
+assert_eq "apply made backup + original" "$(ls "$B/.mac-mini-frame-backups" | wc -l | tr -d ' ')" "2"
 
 out="$(st doctor 2>&1)"
 assert_contains "doctor after apply: msync" "$out" "MSync enabled"
@@ -146,7 +146,7 @@ cxconf_get "$B/cxbottle.conf" EnvironmentVariables CX_GRAPHICS_BACKEND >/dev/nul
 assert_eq "backend auto removes key" "$?" "1"
 st apply --backend metalz >/dev/null 2>&1; assert_eq "bad backend rejected" "$?" "1"
 
-assert_eq "repeat apply adds a backup, keeps original" "$(ls "$B/.steam-tune-backups" | wc -l | tr -d ' ')" "3"
+assert_eq "repeat apply adds a backup, keeps original" "$(ls "$B/.mac-mini-frame-backups" | wc -l | tr -d ' ')" "3"
 st restore >/dev/null 2>&1
 assert_eq "restore latest = state before last apply" "$(cxconf_get "$B/cxbottle.conf" EnvironmentVariables WINEMSYNC)" "1"
 st restore original >/dev/null 2>&1
