@@ -168,7 +168,7 @@ struct TakeoverView: View {
             if q < life {
                 let p = q / life
                 let sx = size.width * (0.25 + 0.7 * hash01(n, 1)), sy = size.height * (0.05 + 0.35 * hash01(n, 2))
-                let angle = Double.pi * (0.72 + 0.12 * hash01(n, 3))           // heading down-left
+                let angle = CGFloat(Double.pi * (0.72 + 0.12 * hash01(n, 3)))  // heading down-left
                 let travel = size.width * 0.35
                 let head = CGPoint(x: sx + cos(angle) * travel * p, y: sy + sin(angle) * travel * p)
                 let tailLen = 220 * unit * min(1, p * 3)

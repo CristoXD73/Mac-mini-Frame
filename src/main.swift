@@ -387,7 +387,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             DispatchQueue.global().async {
                 let ok = run("/usr/sbin/screencapture", ["-x", "-m", file]) == 0 && FileManager.default.fileExists(atPath: file)
                 DispatchQueue.main.async {
-                    if ok { self.flash(); NSSound(named: "Grab")?.play() ?? NSSound(named: "Tink")?.play() }
+                    if ok { self.flash(); (NSSound(named: "Grab") ?? NSSound(named: "Tink"))?.play() }
                     self.hud.message(ok ? "camera.fill" : "exclamationmark.triangle.fill", ok ? "Screenshot saved" : "Screenshot failed · allow Screen Recording for Console Mode", for: ok ? 2 : 5)
                 }
             }
