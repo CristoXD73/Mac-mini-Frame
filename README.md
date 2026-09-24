@@ -8,7 +8,22 @@ Turns a Mac into a controller-driven game console. Press the Xbox button and the
 
 Hold the Xbox button 6 seconds to go back to the desktop.
 
-![Console Mode screens](docs/images/takeover-frames.jpg)
+![Game mode starting on an extra display](docs/images/takeover.gif)
+
+| Hold Xbox to return to the desktop | Launching a game |
+|---|---|
+| ![Exit ring](docs/images/hold-to-exit.gif) | ![Launch screen](docs/images/launch.gif) |
+| **Save Rewind** (Xbox + LB) | **Now Playing** on extra displays |
+| ![Save Rewind](docs/images/rewind.gif) | ![Now Playing](docs/images/now-playing.jpg) |
+
+<p align="center"><img src="docs/images/volume.gif" width="420" alt="Volume"></p>
+<p align="center"><img src="docs/images/messages.jpg" width="640" alt="Screenshot, Quick Resume and force quit messages"></p>
+
+Extra displays show an outline of the controller you're using:
+
+![Xbox, PlayStation and Steam controllers](docs/images/controllers.jpg)
+
+<sub>The game in these images is made up. They're rendered from the app's own views with `tools/render-media.sh`.</sub>
 
 ## Install
 
@@ -71,6 +86,13 @@ To also delete internal-drive backups, settings and logs, run `~/Mac-mini-Frame/
 { "gamesDrive": "/Volumes/Games", "backupDest": "/Volumes/Backup/Console Mode/Save Backups",
   "keepSteamLoaded": true, "nowPlaying": true, "gamingAudioOutput": "LG TV", "lowStorageGB": 50 }
 ```
+
+## Game performance tips (CrossOver on Apple silicon)
+
+- **Upscaler:** in the game, choose **DLSS** (Performance or Balanced), not **XeSS** or FSR. CrossOver turns DLSS into Apple's MetalFX upscaler when the bottle's DLSS option is on. On an M-series Mac mini, Clair Obscur: Expedition 33 had the GPU pinned at 100% with XeSS even on Low. Switching the upscaler dropped GPU load to about 69% right away (measured).
+- **Bottle:** D3DMetal graphics, MSync on, DLSS on (as in Andrew Tsai's and CodeWeavers' guides).
+- **Frame generation:** leave it off if you see tearing.
+- **Engine per game:** a tile can use the GPTK 4 CrossOver or the stock one: `add-game --engine "Game Name" stock|gptk4`.
 
 ## Docs
 

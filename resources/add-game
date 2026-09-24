@@ -10,6 +10,7 @@ so it shows up in (native, GPU-rendered) Big Picture and launches through the bo
   add-game --check       # exit code 10 if --sync has something to do (works while Steam is open)
   add-game --lookup <shortcut appid>   # print the tile's name (used by bottle-launch)
   add-game --uninstall   # remove every tile Console Mode created (and its art); your own shortcuts stay
+  add-game --engine "Game Name" stock|gptk4   # which CrossOver/D3DMetal runs this game (Steam can stay open)
 
 Mac Steam must be closed (it rewrites shortcuts.vdf on exit)."""
 import glob, os, re, shlex, shutil, struct, subprocess, sys, zlib
@@ -79,6 +80,21 @@ def wrapper_path(name):
     return os.path.join(TILES, safe + ".app")
 
 
+ENGINES = {"gptk4": "/Applications/CrossOverGPTK4.app", "stock": "/Applications/CrossOver.app"}
+
+
+def engine_of(name):
+    """The engine a tile was set to (kept in its wrapper), default gptk4."""
+    try:
+        for line in open(os.path.join(wrapper_path(name), "Contents", "MacOS", "launch")):
+            if line.startswith("export CM_CROSSOVER="):
+                path = shlex.split(line.split("=", 1)[1])[0]
+                return next((k for k, v in ENGINES.items() if v == path), "gptk4")
+    except OSError:
+        pass
+    return "gptk4"
+
+
 def shortcut_appid(name):
     return (zlib.crc32((f'"{wrapper_path(name)}"' + name).encode()) & 0xFFFFFFFF) | 0x80000000
 
@@ -96,6 +112,7 @@ def make_wrapper(name, launch_opts):
         f"# Console Mode tile for {name}: runs the game inside the CrossOver bottle.",
         f"export CM_TILE_NAME={q(name)}",
         f"export CM_TILE_SHORTCUT={shortcut_appid(name)}",
+        f"export CM_CROSSOVER={q(ENGINES.get(engine_of(name), ENGINES['gptk4']))}",
         f"exec {q(LAUNCHER)} {kind} {q(target)}",
         ""])
     path = os.path.join(macos, "launch")
@@ -228,13 +245,27 @@ def sync(path, dry_run=False):
 
 def main(argv):
     steam_open = not os.environ.get("CM_ASSUME_STEAM_CLOSED") and subprocess.run(["pgrep", "-x", "steam_osx"], capture_output=True).returncode == 0
-    if steam_open and argv[:1] not in (["--list"], ["--check"], ["--lookup"]):
+    if steam_open and argv[:1] not in (["--list"], ["--check"], ["--lookup"], ["--engine"]):
         sys.exit("Quit Mac Steam first (Steam > Quit Steam), then run this again.")
     files = shortcuts_files()
     if not files:
         sys.exit("No Mac Steam user found; sign in to Steam once first.")
     for path in files:
         sc = load(path)
+        if argv[:1] == ["--engine"] and len(argv) == 3:
+            name, engine = argv[1], argv[2]
+            if engine not in ENGINES:
+                sys.exit(f"engine must be one of: {', '.join(ENGINES)}")
+            tile = next((v for v in sc.values() if v.get("AppName") == name), None)
+            if not tile:
+                sys.exit(f"No tile named {name!r} (see --list)")
+            script = os.path.join(wrapper_path(name), "Contents", "MacOS", "launch")
+            lines = [l for l in open(script).read().splitlines() if not l.startswith("export CM_CROSSOVER=")]
+            lines.insert(4, f"export CM_CROSSOVER='{ENGINES[engine]}'")
+            open(script, "w").write("\n".join(lines) + "\n")
+            subprocess.run(["codesign", "--force", "-s", "-", wrapper_path(name)], capture_output=True)
+            print(f"{name} now runs on {engine} ({ENGINES[engine]})")
+            continue
         if argv[:1] == ["--uninstall"]:
             ours = {k: v for k, v in sc.items()
                     if v.get("Exe", "").strip('"').startswith((TILES, LAUNCHER))}
@@ -262,7 +293,7 @@ def main(argv):
             sync(path)
         elif argv[:1] == ["--list"]:
             for v in sc.values():
-                print(f"{v.get('AppName')}: {target_of(v)}")
+                print(f"{v.get('AppName')}: {target_of(v)}  [{engine_of(v.get('AppName', ''))}]")
         elif argv[:1] == ["--remove"] and len(argv) == 2:
             sc = {k: v for k, v in sc.items() if v.get("AppName") != argv[1]}
             shutil.rmtree(wrapper_path(argv[1]), ignore_errors=True)

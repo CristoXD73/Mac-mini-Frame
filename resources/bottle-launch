@@ -8,7 +8,11 @@
 # Talks to Console Mode through ~/Library/Application Support/Console Mode/session.json:
 #   launching -> playing -> ended, and "resume-request" when this tile's game is suspended
 #   (Quick Resume) so pressing Play resumes it instead of starting a second copy.
-CX="/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine"
+# Which CrossOver runs the game. Tiles can pick one (add-game --engine): the GPTK4 build (D3DMetal 4.0
+# beta, Metal 4 path) or the stock CrossOver (D3DMetal 3.0, stable). Default: GPTK4.
+CROSSOVER="${CM_CROSSOVER:-/Applications/CrossOverGPTK4.app}"
+CX="$CROSSOVER/Contents/SharedSupport/CrossOver/bin/wine"
+[[ -x "$CX" ]] || CX="/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine"
 STEAM='C:\Program Files (x86)\Steam\steam.exe'
 LOG="$HOME/Library/Logs/ConsoleMode.log"
 SESSION="$HOME/Library/Application Support/Console Mode/session.json"
@@ -39,6 +43,16 @@ PY
 session_field() { /usr/bin/python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$SESSION" "$1" 2>/dev/null; }
 
 wins() { "$HERE/bottle-windows" 2>/dev/null; }
+
+# Never run one bottle on two CrossOver builds at once (their Wine servers can't talk to each other).
+for other in /Applications/CrossOverGPTK4.app /Applications/CrossOver.app; do
+  [[ "$other" == "$CROSSOVER" ]] && continue
+  if pgrep -f "${other}/Contents/SharedSupport/CrossOver/.*wineserver" >/dev/null; then
+    log "blocked $NAME: the bottle is running on ${other:t} (this game uses ${CROSSOVER:t})"
+    mkdir -p "${NOTICE:h}"; echo "Close the other game (or the bottle's Steam) first" > "$NOTICE"
+    exit 1
+  fi
+done
 # Is this exe running inside Wine? (Wine shows the Windows path as the command line.)
 exe_running() { ps -Ao command | grep -iF "\\${2:t}" | grep -qv grep; }
 
