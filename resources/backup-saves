@@ -1,251 +1,284 @@
 #!/usr/bin/env python3
-"""Back up save folders a bottle game changed.
+"""Back up the save files a game changed during a play session. Run by Console Mode when a game closes.
 
-    backup-saves --since <unix time the game started> [--label game.exe] [--dry-run]
+  backup-saves --since <unix time the game started> [--label "game.exe"]
+  backup-saves --since <t> --dry-run      # show what would be backed up
+  backup-saves --since <t> --keep 40      # keep more snapshots (Save Rewind runs this while you play)
+  backup-saves --list-json                # every backed-up save folder and its snapshots, newest first
+  backup-saves --restore "<snapshot dir>" # put a snapshot back (current save is snapshotted first)
 
-Sources are only ever READ. Each backup is copied into `.incoming-<stamp>`,
-verified file by file (sizes), then renamed into place.
+The game's own save folders are only ever READ: nothing there is written, moved or deleted.
+Each backup is copied into a temporary folder, verified file by file, then renamed into place,
+so an interrupted or partial copy never looks like a real backup.
 """
-import argparse
-import hashlib
-import json
-import os
-import shutil
-import sys
-import time
+import hashlib, json, os, shutil, sys, time
 
-HOME = os.environ.get("CM_HOME", os.path.expanduser("~"))
-BOTTLE = os.environ.get(
-    "CM_BOTTLE", os.path.join(HOME, "Library/Application Support/CrossOver/Bottles/Steam"))
-DEST = os.environ.get("CM_BACKUP_DEST", "/Volumes/Storage/Console Mode/Save Backups")
-FALLBACK_DEST = os.path.join(HOME, "Library/Application Support/Console Mode/Save Backups")
-
-MAX_BYTES = 2 * 1024 ** 3
-MAX_FILES = 5000
-KEEP = 15
-SLACK = 60  # seconds before --since that still count as "changed this session"
-
-# Top-level ~/Documents folders that are never game saves.
-DOCUMENTS_SKIP = {
-    "codex", "claude", "projects", "github", "git", "code", "dev", "src", "work",
-    "my games",  # handled as its own root
-    "zoom", "microsoft", "adobe", "office", "onedrive", "dropbox", "screenshots",
-    "shared", "scans", "receipts", "invoices", "notes", "obsidian",
-}
-SKIP_DIRS = {
-    "cache", "caches", "shadercache", "shadercaches", "gpucache", "d3dscache", "logs", "log",
-    "temp", "tmp", "steam", "microsoft", "mods", "benchmarkresults", "screenshots",
-    "nvidia", "amd", "intel", "packages", "programs", "crossover", "wine", "comms",
-    "connecteddevicesplatform", "virtualstore", "squirreltemp", "webcache", "cef",
-    "htmlcache", "webview", "d3d", "dxcache", "pipelinecache", "videos", "movies",
-}
-SKIP_DIR_PREFIXES = ("crash",)
-SKIP_EXT = (".log", ".dmp", ".tmp", ".cache", ".mdmp", ".etl", ".pdb", ".bak~")
-STEAM_OWN_APPIDS = {"7", "760", "241100"}
-
-
-def skip_dir(name):
-    n = name.lower()
-    return n in SKIP_DIRS or n.startswith(SKIP_DIR_PREFIXES) or n.startswith(".")
-
-
-def skip_file(name):
-    n = name.lower()
-    return n.endswith(SKIP_EXT) or n in (".ds_store", "desktop.ini", "thumbs.db")
-
-
-def users_dir():
-    base = os.path.join(BOTTLE, "drive_c", "users")
-    for u in ("crossover", os.environ.get("USER", "")):
-        if u and os.path.isdir(os.path.join(base, u)):
-            return os.path.join(base, u)
-    return os.path.join(base, "crossover")
-
-
-def candidates():
-    """Yield (label parts, path) for every folder that could hold a save."""
-    u = users_dir()
-    for root_name, rel in (("Saved Games", "Saved Games"),
-                           ("AppData Roaming", "AppData/Roaming"),
-                           ("AppData Local", "AppData/Local"),
-                           ("AppData LocalLow", "AppData/LocalLow")):
-        root = os.path.join(u, rel)
-        for vendor in _subdirs(root):
-            vpath = os.path.join(root, vendor)
-            games = list(_subdirs(vpath))
-            if games:  # two folder levels = one save folder
-                for game in games:
-                    yield (root_name, vendor, game), os.path.join(vpath, game)
-            else:      # a vendor folder with files directly in it
-                yield (root_name, vendor), vpath
-
-    docs = os.path.join(HOME, "Documents")
-    for game in _subdirs(os.path.join(docs, "My Games")):
-        yield ("My Games", game), os.path.join(docs, "My Games", game)
-    for top in _subdirs(docs):
-        if top.lower() in DOCUMENTS_SKIP:
-            continue
-        for game in _subdirs(os.path.join(docs, top)):
-            yield ("Documents", top, game), os.path.join(docs, top, game)
-
-    steam = None
-    for d in ("drive_c/Program Files (x86)/Steam", "drive_c/Program Files/Steam"):
-        if os.path.isdir(os.path.join(BOTTLE, d)):
-            steam = os.path.join(BOTTLE, d)
-            break
-    if steam:
-        ud = os.path.join(steam, "userdata")
-        for acct in _subdirs(ud, allow_all=True):
-            for appid in _subdirs(os.path.join(ud, acct), allow_all=True):
-                if appid in STEAM_OWN_APPIDS or not appid.isdigit():
-                    continue
-                remote = os.path.join(ud, acct, appid, "remote")
-                if os.path.isdir(remote):
-                    yield ("Steam Cloud", acct, appid), remote
-
-
-def _subdirs(path, allow_all=False):
+HOME = os.path.expanduser("~")
+BOTTLE_USER = HOME + "/Library/Application Support/CrossOver/Bottles/Steam/drive_c/users/crossover"
+BOTTLE_STEAM = HOME + "/Library/Application Support/CrossOver/Bottles/Steam/drive_c/Program Files (x86)/Steam"
+def _config_value(key, default):
+    """Optional settings from ~/Library/Application Support/Console Mode/config.json."""
     try:
-        names = sorted(os.listdir(path))
+        return json.load(open(os.path.expanduser("~/Library/Application Support/Console Mode/config.json"))).get(key, default)
+    except (OSError, ValueError):
+        return default
+
+
+# Where backups go: config "backupDest" (a folder on another drive), CM_BACKUP_DEST for tests.
+DEST_PRIMARY = os.environ.get("CM_BACKUP_DEST") or _config_value("backupDest", "/Volumes/Storage/Console Mode/Save Backups")
+DEST_FALLBACK = HOME + "/Library/Application Support/Console Mode/Save Backups"
+LOG = HOME + "/Library/Logs/ConsoleMode.log"
+KEEP = 15                      # newest backups kept per save folder
+MAX_GROUP_BYTES = 2 << 30      # skip anything over 2 GB: that's game data, not saves
+MAX_GROUP_FILES = 5000
+
+# (root, how many folder levels below it identify one game's save folder)
+ROOTS = [
+    (BOTTLE_USER + "/Saved Games", 2),
+    (BOTTLE_USER + "/AppData/Roaming", 2),
+    (BOTTLE_USER + "/AppData/Local", 2),
+    (BOTTLE_USER + "/AppData/LocalLow", 2),
+    # The bottle's Documents folder IS the Mac's ~/Documents, so only game-style folders there.
+    (HOME + "/Documents/My Games", 1),
+    (HOME + "/Documents", 2),
+]
+# Folders that are never saves (matched against any path component, case-insensitive).
+SKIP_DIRS = {"cache", "caches", "shadercache", "shader cache", "gpucache", "d3dscache", "code cache", "webcache",
+             "htmlcache", "temp", "tmp", "logs", "log", "crashdumps", "crashpad", "crashes", "crash reports",
+             "microsoft", "steam", "crossover", "apple", "packages", "nvidia", "amd", "mesa", "d3dmetal", "wine",
+             "my games" , "benchmarkresults", "screenshots", "videos", "mods"}
+SKIP_EXT = (".log", ".dmp", ".tmp", ".lock", ".etl", ".cache", ".mdmp", ".part")
+# Steam's own client data in userdata (settings, screenshots, controller configs), not games.
+STEAM_CLIENT_APPS = {"7", "760", "241100"}
+# Top-level ~/Documents folders that are never game saves.
+DOCUMENTS_SKIP = {"codex", "claude", "projects", "github", "zoom", "microsoft user data", "adobe", "obsidian"}
+
+
+def log(msg):
+    try:        # logging must never be the reason a backup or restore fails
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        with open(LOG, "a") as f:
+            f.write(f"[backup-saves {time.ctime()}] {msg}\n")
     except OSError:
-        return
-    for n in names:
-        p = os.path.join(path, n)
-        if os.path.isdir(p) and not os.path.islink(p) and (allow_all or not skip_dir(n)):
-            yield n
+        pass
 
 
-def scan(path):
-    """[(relpath, size, mtime)] of files worth backing up, or None if too big."""
-    files, total = [], 0
-    for root, dirs, names in os.walk(path):
-        dirs[:] = sorted(d for d in dirs if not skip_dir(d)
-                         and not os.path.islink(os.path.join(root, d)))
-        for n in sorted(names):
-            if skip_file(n):
+def skipped(rel_parts, name):
+    return (any(p.lower() in SKIP_DIRS for p in rel_parts) or name.startswith(".") or name.lower().endswith(SKIP_EXT))
+
+
+def walk(folder):
+    """(relative path, size, mtime) for every file under folder that isn't cache/log noise. Never follows links."""
+    out = []
+    for dirpath, dirs, files in os.walk(folder, followlinks=False):
+        rel_dir = os.path.relpath(dirpath, folder)
+        parts = [] if rel_dir == "." else rel_dir.split(os.sep)
+        dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIRS and not d.startswith(".")]
+        for name in files:
+            if skipped(parts, name):
                 continue
-            p = os.path.join(root, n)
-            if os.path.islink(p):
-                continue
+            p = os.path.join(dirpath, name)
             try:
-                st = os.stat(p)
+                st = os.lstat(p)
             except OSError:
                 continue
-            files.append((os.path.relpath(p, path), st.st_size, st.st_mtime))
-            total += st.st_size
-            if len(files) > MAX_FILES or total > MAX_BYTES:
-                return None
-    return files
+            out.append((os.path.relpath(p, folder), st.st_size, int(st.st_mtime)))
+    return out
+
+
+def changed_save_folders(since):
+    """Save folders (at the right depth under each root) holding files modified since `since`."""
+    groups = {}
+    for root, depth in ROOTS:
+        if not os.path.isdir(root):
+            continue
+        for dirpath, dirs, files in os.walk(root, followlinks=False):
+            rel = os.path.relpath(dirpath, root)
+            parts = [] if rel == "." else rel.split(os.sep)
+            if root == HOME + "/Documents" and parts and parts[0].lower() in DOCUMENTS_SKIP | {"my games"}:
+                dirs[:] = []; continue
+            dirs[:] = [d for d in dirs if d.lower() not in SKIP_DIRS and not d.startswith(".")]
+            if len(parts) > depth + 6:        # deep enough; saves are never this far down
+                dirs[:] = []
+            if len(parts) < depth:
+                continue
+            for name in files:
+                if skipped(parts, name):
+                    continue
+                try:
+                    if os.lstat(os.path.join(dirpath, name)).st_mtime >= since:
+                        key = os.path.join(root, *parts[:depth])
+                        groups[key] = (root, parts[:depth])
+                        break
+                except OSError:
+                    pass
+    # Steam Cloud saves: userdata/<account>/<appid>/remote
+    for acct in _listdir(BOTTLE_STEAM + "/userdata"):
+        for appid in _listdir(os.path.join(BOTTLE_STEAM, "userdata", acct)):
+            remote = os.path.join(BOTTLE_STEAM, "userdata", acct, appid, "remote")
+            if appid.isdigit() and appid not in STEAM_CLIENT_APPS and os.path.isdir(remote) and any(m >= since for _, _, m in walk(remote)):
+                groups[remote] = ("Steam Cloud", [acct, appid])
+    return groups
+
+
+def _listdir(p):
+    try:
+        return os.listdir(p)
+    except OSError:
+        return []
+
+
+def group_name(root, parts):
+    base = root if root == "Steam Cloud" else os.path.basename(root.rstrip("/"))
+    return " - ".join([base] + parts).replace("/", "_")
 
 
 def manifest_hash(files):
-    h = hashlib.sha256()
-    for rel, size, mtime in files:
-        h.update(f"{rel}\0{size}\0{int(mtime)}\n".encode("utf-8", "surrogateescape"))
-    return h.hexdigest()
+    return hashlib.sha1(json.dumps(sorted(files)).encode()).hexdigest()
 
 
-def safe_name(parts):
-    name = " - ".join(parts)
-    return "".join("_" if c in '/:\\' else c for c in name).strip() or "unnamed"
-
-
-def last_hash(folder):
-    try:
-        stamps = sorted(d for d in os.listdir(folder) if not d.startswith("."))
-    except OSError:
-        return None
-    for s in reversed(stamps):
+def backup(src, name, dest_root, dry_run, kind="auto", force=False):
+    files = walk(src)
+    total = sum(s for _, s, _ in files)
+    if not files:
+        return
+    if total > MAX_GROUP_BYTES or len(files) > MAX_GROUP_FILES:
+        log(f"skipped {name}: {len(files)} files / {total >> 20} MB is too big to be saves")
+        return
+    target_dir = os.path.join(dest_root, name)
+    digest = manifest_hash(files)
+    existing = sorted(d for d in _listdir(target_dir) if not d.startswith("."))
+    if existing and not force:
         try:
-            with open(os.path.join(folder, s, ".manifest.json"), encoding="utf-8") as f:
-                return json.load(f).get("hash")
+            last = json.load(open(os.path.join(target_dir, existing[-1], ".manifest.json")))
+            if last.get("hash") == digest:
+                log(f"{name}: unchanged since last backup")
+                return
         except (OSError, ValueError):
-            continue
-    return None
-
-
-def backup_one(src, files, folder, stamp, label, since):
-    os.makedirs(folder, exist_ok=True)
-    incoming = os.path.join(folder, f".incoming-{stamp}")
-    final = os.path.join(folder, stamp)
-    if os.path.exists(final):
-        return None
-    shutil.rmtree(incoming, ignore_errors=True)
+            pass
+    stamp = time.strftime("%Y-%m-%d %H-%M-%S")
+    n = 2
+    while os.path.exists(os.path.join(target_dir, stamp)):     # several saves in the same second
+        stamp = time.strftime("%Y-%m-%d %H-%M-%S") + f" ({n})"; n += 1
+    if dry_run:
+        print(f"would back up {name}: {len(files)} files, {total >> 10} KB -> {target_dir}/{stamp}")
+        return
+    tmp = os.path.join(target_dir, f".incoming-{stamp}")
+    shutil.rmtree(tmp, ignore_errors=True)
     for rel, _, _ in files:
-        dst = os.path.join(incoming, rel)
-        os.makedirs(os.path.dirname(dst), exist_ok=True)
-        with open(os.path.join(src, rel), "rb") as fi, open(dst, "wb") as fo:
-            shutil.copyfileobj(fi, fo, 1024 * 1024)
-        shutil.copystat(os.path.join(src, rel), dst)
-    # Verify every copy before it becomes a real backup.
-    for rel, size, _ in files:
-        dst = os.path.join(incoming, rel)
-        if not os.path.isfile(dst) or os.path.getsize(dst) != size:
-            shutil.rmtree(incoming, ignore_errors=True)
-            raise IOError(f"verification failed for {rel}")
-    with open(os.path.join(incoming, ".manifest.json"), "w", encoding="utf-8") as f:
-        json.dump({"source": src, "label": label, "since": since, "created": time.time(),
-                   "hash": manifest_hash(files),
-                   "files": [{"path": r, "size": s} for r, s, _ in files]}, f, indent=1)
-    os.rename(incoming, final)
-    prune(folder)
-    return final
+        s, d = os.path.join(src, rel), os.path.join(tmp, rel)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(s, d, follow_symlinks=False)     # read source, write only into our own folder
+    # Verify: same files, same sizes.
+    copied = {r: s for r, s, _ in walk(tmp)}
+    if any(copied.get(r) != s for r, s, _ in files):
+        shutil.rmtree(tmp, ignore_errors=True)
+        log(f"{name}: verification failed, backup discarded (source untouched)")
+        return
+    json.dump({"hash": digest, "source": src, "files": len(files), "bytes": total, "time": stamp, "kind": kind},
+              open(os.path.join(tmp, ".manifest.json"), "w"))
+    os.rename(tmp, os.path.join(target_dir, stamp))
+    log(f"backed up {name}: {len(files)} files, {total >> 10} KB -> {target_dir}/{stamp}")
+    return os.path.join(target_dir, stamp)
+    # Retention: keep the newest KEEP backups of this save folder.
+    for old in sorted(d for d in _listdir(target_dir) if not d.startswith("."))[:-KEEP]:
+        shutil.rmtree(os.path.join(target_dir, old), ignore_errors=True)
 
 
-def prune(folder):
-    stamps = sorted(d for d in os.listdir(folder) if not d.startswith("."))
-    for old in stamps[:-KEEP]:
-        shutil.rmtree(os.path.join(folder, old), ignore_errors=True)
+def dest_roots():
+    return [d for d in (DEST_PRIMARY, DEST_FALLBACK) if os.path.isdir(d)]
 
 
-def dest_root():
-    if "CM_BACKUP_DEST" in os.environ:
-        return DEST
-    # Use the Storage drive only when it is really mounted, never an empty
-    # mount-point folder on the internal disk.
-    return DEST if os.path.ismount("/Volumes/Storage") else FALLBACK_DEST
+def list_json():
+    out = []
+    for root in dest_roots():
+        for group in sorted(_listdir(root)):
+            gdir = os.path.join(root, group)
+            snaps = []
+            for snap in sorted((d for d in _listdir(gdir) if not d.startswith(".")), reverse=True):
+                try:
+                    m = json.load(open(os.path.join(gdir, snap, ".manifest.json")))
+                except (OSError, ValueError):
+                    continue
+                snaps.append({"dir": os.path.join(gdir, snap), "time": snap, "files": m.get("files"), "bytes": m.get("bytes"),
+                              "kind": m.get("kind", "auto"), "source": m.get("source")})
+            if snaps:
+                out.append({"group": group, "source": snaps[0]["source"], "snapshots": snaps})
+    print(json.dumps(out))
+
+
+def allowed_source(src):
+    """Restores may only write into a real save location: never anywhere else on disk."""
+    src = os.path.realpath(src)
+    roots = [os.path.realpath(r) for r, _ in ROOTS] + [os.path.realpath(BOTTLE_STEAM + "/userdata")]
+    return any(src.startswith(r + os.sep) for r in roots) and src not in roots
+
+
+def restore(snapshot):
+    snapshot = os.path.realpath(snapshot)
+    try:
+        m = json.load(open(os.path.join(snapshot, ".manifest.json")))
+    except (OSError, ValueError):
+        return {"ok": False, "error": "not a Console Mode snapshot"}
+    src = m.get("source", "")
+    if not allowed_source(src):
+        return {"ok": False, "error": f"refusing to restore outside save folders: {src}"}
+    group_dir = os.path.dirname(snapshot)
+    name = os.path.basename(group_dir)
+    dest_root = os.path.dirname(group_dir)
+    # 1. Snapshot what's there now, so the restore can be undone. Abort if that fails.
+    if os.path.isdir(src) and walk(src):
+        before = backup(src, name, dest_root, False, kind="before-restore", force=True)
+        if not before:
+            return {"ok": False, "error": "could not back up the current save first; nothing was changed"}
+    wanted = {r: sz for r, sz, _ in walk(snapshot) if r != ".manifest.json"}
+    # 2. Remove save files that didn't exist at that point (they're in the backup from step 1).
+    for rel, _, _ in (walk(src) if os.path.isdir(src) else []):
+        if rel not in wanted:
+            os.remove(os.path.join(src, rel))
+    # 3. Copy the snapshot back.
+    for rel in wanted:
+        d = os.path.join(src, rel)
+        os.makedirs(os.path.dirname(d), exist_ok=True)
+        shutil.copy2(os.path.join(snapshot, rel), d, follow_symlinks=False)
+    # 4. Verify.
+    now = {r: sz for r, sz, _ in walk(src)}
+    ok = all(now.get(r) == sz for r, sz in wanted.items())
+    log(f"restore {name} <- {os.path.basename(snapshot)}: {'ok' if ok else 'VERIFY FAILED'}")
+    return {"ok": ok, "restored": os.path.basename(snapshot), "files": len(wanted)}
 
 
 def main(argv):
-    ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
-    ap.add_argument("--since", type=float, required=True)
-    ap.add_argument("--label", default="")
-    ap.add_argument("--dry-run", action="store_true")
-    a = ap.parse_args(argv)
-
-    t0 = time.time()
-    cutoff = a.since - SLACK
-    stamp = time.strftime("%Y-%m-%d %H-%M-%S", time.localtime())
-    dest = dest_root()
-    done = 0
-    for parts, path in candidates():
-        files = scan(path)
-        if files is None:
-            print(f"skip (over {MAX_FILES} files or 2 GB): {path}")
-            continue
-        if not files or max(m for _, _, m in files) < cutoff:
-            continue
-        folder = os.path.join(dest, safe_name(parts))
-        h = manifest_hash(files)
-        if h == last_hash(folder):
-            print(f"unchanged since last backup: {path}")
-            continue
-        if a.dry_run:
-            print(f"would back up: {path} -> {folder}/{stamp}")
-            done += 1
-            continue
+    global KEEP
+    if "--list-json" in argv:
+        return list_json()
+    if "--restore" in argv:
+        print(json.dumps(restore(argv[argv.index("--restore") + 1])))
+        return
+    if "--keep" in argv:
+        KEEP = max(1, int(argv[argv.index("--keep") + 1]))
+    if "--since" not in argv:
+        sys.exit(__doc__)
+    since = float(argv[argv.index("--since") + 1]) - 60
+    label = argv[argv.index("--label") + 1] if "--label" in argv else "game"
+    dry = "--dry-run" in argv
+    # The drive holding the backup folder must be connected (/Volumes/<drive>/...).
+    parts = DEST_PRIMARY.split("/")
+    drive = "/".join(parts[:3]) if DEST_PRIMARY.startswith("/Volumes/") else os.path.dirname(DEST_PRIMARY)
+    dest = DEST_PRIMARY if os.path.isdir(drive) else DEST_FALLBACK
+    if dest == DEST_FALLBACK and not dry:
+        log("backup drive not connected: backing up to the internal drive instead")
+    groups = changed_save_folders(since)
+    if not groups:
+        log(f"{label}: no changed saves found")
+        if dry: print("no changed saves")
+        return
+    for src, (root, parts) in groups.items():
         try:
-            out = backup_one(path, files, folder, stamp, a.label, a.since)
-        except (OSError, IOError) as e:
-            print(f"FAILED {path}: {e}", file=sys.stderr)
-            continue
-        if out:
-            print(f"backed up: {path} -> {out} ({len(files)} files)")
-            done += 1
-    print(f"{done} folder(s) {'found' if a.dry_run else 'backed up'} in {time.time() - t0:.1f}s"
-          + (f" [{a.label}]" if a.label else ""))
-    return 0
+            backup(src, group_name(root, parts), dest, dry)
+        except Exception as e:     # one bad folder must never stop the others
+            log(f"error backing up {src}: {e}")
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    main(sys.argv[1:])

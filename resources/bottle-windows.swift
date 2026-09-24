@@ -1,26 +1,11 @@
-// Prints the owner name of a large on-screen window belonging to a bottle
-// program (owner name ends in ".exe"), ignoring Steam's own windows.
-// Prints nothing and exits 1 if there is none. Used by bottle-launch.
-import CoreGraphics
-import Foundation
-
-let ignored: Set<String> = [
-    "steam.exe", "steamwebhelper.exe", "steamservice.exe", "gameoverlayui.exe",
-    "explorer.exe", "services.exe", "winedevice.exe", "plugplay.exe", "rpcss.exe",
-    "svchost.exe", "conhost.exe", "start.exe", "winemenubuilder.exe", "crashhandler.exe",
-]
-
-let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                      kCGNullWindowID) as? [[String: Any]] ?? []
-for w in list {
-    guard let owner = w[kCGWindowOwnerName as String] as? String,
-          owner.lowercased().hasSuffix(".exe"),
-          !ignored.contains(owner.lowercased()),
-          (w[kCGWindowAlpha as String] as? Double ?? 1) > 0,
-          let b = w[kCGWindowBounds as String] as? [String: Double],
-          (b["Width"] ?? 0) >= 640, (b["Height"] ?? 0) >= 400
-    else { continue }
-    print(owner)
-    exit(0)
+import Cocoa
+// Print the owner of any large on-screen window from the bottle that isn't Steam or a system helper.
+let skip: Set<String> = ["steam.exe", "steamwebhelper.exe", "explorer.exe", "services.exe", "winedevice.exe", "plugplay.exe",
+    "svchost.exe", "rpcss.exe", "conhost.exe", "start.exe", "steamerrorreporter.exe", "crashhandler.exe"]
+// All windows, not just the current Space's: Wine puts full-screen games in their own Space.
+let info = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+for w in info {
+    guard let o = w[kCGWindowOwnerName as String] as? String, o.lowercased().hasSuffix(".exe"), !skip.contains(o.lowercased()),
+          let b = w[kCGWindowBounds as String] as? [String: CGFloat], (b["Width"] ?? 0) >= 640, (b["Height"] ?? 0) >= 480 else { continue }
+    print(o); break
 }
-exit(1)

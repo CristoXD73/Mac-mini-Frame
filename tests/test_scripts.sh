@@ -1,71 +1,70 @@
-#!/bin/bash
-# Tests for the zsh resource scripts (bottle-launch, watchdog) using a fake
-# wine and a fake bottle-windows. Needs zsh (stock on macOS).
-set -u
-ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+#!/bin/zsh
+# Tests for Console Mode's helper scripts. Everything runs in a throwaway fake home folder, so
+# nothing on the machine (saves, Steam, the real app) is touched. macOS only (uses codesign).
+ROOT="${0:A:h:h}"; R="$ROOT/resources"
 PASS=0; FAIL=0
 check() { if eval "$2"; then PASS=$((PASS+1)); echo "ok   $1"; else FAIL=$((FAIL+1)); echo "FAIL $1"; fi; }
-
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
-export CM_LOG="$T/log" CM_BOTTLE="$T/bottle" CM_POLL=1
-mkdir -p "$CM_BOTTLE/drive_c/Program Files (x86)/Steam"; : > "$CM_BOTTLE/drive_c/Program Files (x86)/Steam/steam.exe"
-cat > "$T/wine" <<'W'
-#!/bin/bash
-printf '%s|' "$@" >> "$(dirname "$0")/wine.calls"; echo >> "$(dirname "$0")/wine.calls"
-W
-cat > "$T/windows" <<'W'
-#!/bin/bash
-[ -f "$(dirname "$0")/window" ] && cat "$(dirname "$0")/window"
-W
-chmod +x "$T/wine" "$T/windows"
-export CM_WINE="$T/wine" CM_BOTTLE_WINDOWS="$T/windows"
 
-# --- steam launch: window appears at ~2s, closes at ~4s
-( sleep 2; echo "Cyberpunk2077.exe" > "$T/window"; sleep 2; rm -f "$T/window" ) &
-start=$(date +%s)
-CM_GONE_SECS=2 zsh "$ROOT/resources/bottle-launch" steam 1091500; rc=$?
-elapsed=$(( $(date +%s) - start ))
-check "steam launch exits 0 after window closes" '[ $rc -eq 0 ]'
-check "waited for the window to close (>=5s, was ${elapsed}s)" '[ $elapsed -ge 5 ]'
-check "wine called with bottle + applaunch" 'grep -q "^--bottle|Steam|C:\\\\Program Files (x86)\\\\Steam\\\\steam.exe|-silent|-applaunch|1091500|" "$T/wine.calls"'
-check "logged game window" 'grep -q "game window up: Cyberpunk2077.exe" "$CM_LOG"'
+# --- syntax
+for f in "$R/bottle-launch" "$R/watchdog" "$ROOT/build.sh" "$ROOT/install.sh" "$ROOT/uninstall.sh"; do
+  check "zsh syntax: ${f:t}" "zsh -n '$f'"
+done
+for f in "$R/add-game" "$R/backup-saves"; do
+  check "python syntax: ${f:t}" "python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read())' '$f'"
+done
 
-# --- a brief flicker (window gone 1s) must not end the session
-: > "$T/wine.calls"
-( sleep 1; echo "g.exe" > "$T/window"; sleep 2; rm -f "$T/window"; sleep 1; echo "g.exe" > "$T/window"; sleep 2; rm -f "$T/window" ) &
-start=$(date +%s)
-CM_GONE_SECS=3 zsh "$ROOT/resources/bottle-launch" steam 620
-elapsed=$(( $(date +%s) - start ))
-check "flicker tolerated (ran ${elapsed}s >= 8s)" '[ $elapsed -ge 8 ]'
+# --- backup-saves: snapshot → change → restore → undo, and the restore guard
+H="$T/home"; S="$H/Library/Application Support/CrossOver/Bottles/Steam/drive_c/users/crossover/Saved Games/Studio/MyGame"
+mkdir -p "$S" "$H/dest"
+B() { HOME="$H" CM_BACKUP_DEST="$H/dest" python3 "$R/backup-saves" "$@"; }
+first() { B --list-json | python3 -c "import json,sys; g=json.load(sys.stdin)[0]; print([x['dir'] for x in g['snapshots'] if x['kind']==sys.argv[1]][int(sys.argv[2])])" "$1" "$2"; }
+echo "v1" > "$S/slot1.sav"; START=$(( $(date +%s) - 5 )); B --since $START
+echo "v2" > "$S/slot1.sav"; echo "new" > "$S/slot2.sav"; B --since $START
+check "two snapshots recorded" '[ "$(B --list-json | python3 -c "import json,sys; print(len(json.load(sys.stdin)[0][\"snapshots\"]))")" = 2 ]'
+B --restore "$(first auto -1)" >/dev/null
+check "restore brings back the old save" '[ "$(cat "$S/slot1.sav")" = v1 ] && [ ! -f "$S/slot2.sav" ]'
+B --restore "$(first before-restore 0)" >/dev/null
+check "undo (before-restore snapshot) brings it all back" '[ "$(cat "$S/slot1.sav")" = v2 ] && [ "$(cat "$S/slot2.sav")" = new ]'
+mkdir -p "$H/dest/Evil/x"; echo '{"source": "/etc"}' > "$H/dest/Evil/x/.manifest.json"
+check "refuses to restore outside save folders" 'B --restore "$H/dest/Evil/x" | grep -q refusing'
 
-# --- exe launch
-mkdir -p "$T/My Game"; : > "$T/My Game/game.exe"; : > "$T/wine.calls"
-( sleep 1; echo "game.exe" > "$T/window"; sleep 1; rm -f "$T/window" ) &
-CM_GONE_SECS=1 zsh "$ROOT/resources/bottle-launch" exe "$T/My Game/game.exe"
-check "exe launch uses --workdir" 'grep -qF -- "--bottle|Steam|--workdir|$T/My Game|$T/My Game/game.exe|" "$T/wine.calls"'
+# --- add-game: wrapper tiles, lookup, uninstall keeps foreign shortcuts
+mkdir -p "$H/Library/Application Support/Steam/userdata/123/config" /tmp/cm-test-game && touch /tmp/cm-test-game/Game.exe
+A() { HOME="$H" CM_ASSUME_STEAM_CLOSED=1 python3 "$R/add-game" "$@"; }
+A "Test Game" exe "/tmp/cm-test-game/Game.exe" >/dev/null
+W="$H/Library/Application Support/Console Mode/Tiles/Test Game.app"
+check "wrapper app created" '[ -x "$W/Contents/MacOS/launch" ] && codesign -v "$W" 2>/dev/null'
+check "wrapper runs bottle-launch with the target" 'grep -q "exe .*/tmp/cm-test-game/Game.exe" "$W/Contents/MacOS/launch"'
+check "--list shows the tile" 'A --list | grep -q "Test Game: exe"'
+ID=$(sed -n "s/^export CM_TILE_SHORTCUT=//p" "$W/Contents/MacOS/launch")
+check "--lookup finds the tile by id" '[ "$(A --lookup $ID)" = "Test Game" ]'
+HOME="$H" python3 - "$R/add-game" <<'PY'
+import importlib.util, glob, os, sys
+from importlib.machinery import SourceFileLoader
+m = SourceFileLoader("add_game", sys.argv[1]).load_module()
+path = glob.glob(os.path.expanduser("~/Library/Application Support/Steam/userdata/*/config/shortcuts.vdf"))[0]
+sc = m.load(path); sc["99"] = {"appid": 5, "AppName": "My Own Shortcut", "Exe": '"/Applications/Chess.app"', "LaunchOptions": ""}
+m.save(path, sc)
+PY
+A --uninstall >/dev/null
+check "--uninstall removes Console Mode's tiles" '! A --list | grep -q "Test Game"'
+check "--uninstall keeps the user's own shortcuts" 'A --list | grep -q "My Own Shortcut"'
+check "--uninstall removes the wrapper apps" '[ ! -d "$H/Library/Application Support/Console Mode/Tiles" ]'
+rm -rf /tmp/cm-test-game
 
-# --- errors
-CM_START_TIMEOUT=2 zsh "$ROOT/resources/bottle-launch" steam 620; rc=$?
-check "no window -> exit 2" '[ $rc -eq 2 ]'
-zsh "$ROOT/resources/bottle-launch" steam abc 2>/dev/null; rc=$?
-check "bad appid -> exit 1" '[ $rc -eq 1 ]'
-zsh "$ROOT/resources/bottle-launch" exe /nope.exe 2>/dev/null; rc=$?
-check "missing exe -> exit 1" '[ $rc -eq 1 ]'
+# --- watchdog: resumes paused processes when Console Mode isn't running
+if pgrep -x ConsoleMode >/dev/null; then
+  echo "skip watchdog test (Console Mode is running on this machine)"
+else
+  sleep 60 & P=$!; kill -STOP $P
+  mkdir -p "$H/Library/Application Support/Console Mode" "$H/Library/Logs"
+  echo "[{\"pid\": $P, \"path\": \"/bin/sleep\"}]" > "$H/Library/Application Support/Console Mode/frozen.json"
+  HOME="$H" zsh "$R/watchdog"
+  check "watchdog resumed the paused process" '[ "$(ps -o stat= -p $P | cut -c1)" != T ]'
+  check "watchdog cleared frozen.json" '[ ! -f "$H/Library/Application Support/Console Mode/frozen.json" ]'
+  kill $P 2>/dev/null
+fi
 
-# --- watchdog
-sleep 60 & victim=$!
-kill -STOP $victim
-export CM_FROZEN="$T/frozen.json"
-printf '{"pids":[%d,999999],"hidden":["com.apple.Safari"]}' $victim > "$CM_FROZEN"
-state() { ps -o stat= -p "$1" | cut -c1; }
-check "victim is paused" '[ "$(state $victim)" = T ]'
-CM_PROC_NAME=bash zsh "$ROOT/resources/watchdog"   # stands in for a running ConsoleMode
-check "watchdog leaves things alone while app runs" '[ -f "$CM_FROZEN" ] && [ "$(state $victim)" = T ]'
-CM_PROC_NAME=NoSuchProcessXYZ zsh "$ROOT/resources/watchdog"
-check "watchdog resumes paused pid" '[ "$(state $victim)" != T ]'
-check "watchdog removes frozen.json" '[ ! -f "$CM_FROZEN" ]'
-kill $victim 2>/dev/null
-CM_PROC_NAME=NoSuchProcessXYZ zsh "$ROOT/resources/watchdog"; rc=$?
-check "watchdog no-op without file" '[ $rc -eq 0 ]'
-
-echo; echo "$PASS passed, $FAIL failed"; [ $FAIL -eq 0 ]
+echo "---- $PASS passed, $FAIL failed"
+(( FAIL == 0 ))

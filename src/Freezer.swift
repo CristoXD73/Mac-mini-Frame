@@ -1,144 +1,116 @@
-import AppKit
-import Foundation
+import Cocoa
+import Darwin
 
-/// Hides and pauses (SIGSTOP) everything the user runs while in game mode, and
-/// resumes it afterwards. The pid list is written to disk *before* any signal
-/// is sent, so the watchdog LaunchAgent or the next launch can always undo it.
-enum Freezer {
-    struct State: Codable {
-        var pids: [Int32]
-        var hidden: [String]   // bundle ids of apps we hid
-        var time: Double
+// Game mode "freeze": pause (SIGSTOP) every app and background process the user runs, so the
+// game gets the whole machine, then resume (SIGCONT) them on exit. Paused processes keep all
+// their state; nothing is quit or restarted.
+//
+// Safety:
+//  - macOS itself, Steam, CrossOver/Wine (the games), Console Mode and Claude are never paused,
+//    including everything they launched.
+//  - The paused list is written to disk first. If Console Mode dies, the watchdog LaunchAgent
+//    (Resources/watchdog) resumes them, and so does the next Console Mode launch. SIGCONT on a
+//    process that isn't stopped is harmless, so resuming is always safe to repeat.
+
+let frozenFile = supportDir + "/frozen.json"
+let home = NSHomeDirectory()
+
+/// Never paused, and neither is anything they started.
+let protectedPrefixes = [
+    "/System/Library/", "/System/Cryptexes/", "/System/iOSSupport/",
+    "/System/Volumes/Preboot/Cryptexes/OS/", "/System/Volumes/Preboot/Cryptexes/App/usr/", "/usr/", "/bin/", "/sbin/", "/private/",
+    "/Library/Apple/", "/Library/Developer/", "/Library/Application Support/CrossOver",
+    "/Applications/Claude.app", home + "/Library/Application Support/Claude/",
+    "/Applications/Steam.app", home + "/Library/Application Support/Steam/",
+    "/Applications/CrossOver", home + "/Library/Application Support/CrossOver/",
+    "/Applications/Console Mode.app",
+]
+
+struct Proc { let pid: pid_t; let ppid: pid_t; let path: String }
+
+func userProcesses() -> [Proc] {
+    var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(getuid())]
+    var size = 0
+    guard sysctl(&mib, 4, nil, &size, nil, 0) == 0 else { return [] }
+    let stride = MemoryLayout<kinfo_proc>.stride
+    var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 32)
+    size = procs.count * stride
+    guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return [] }
+    var buf = [CChar](repeating: 0, count: 4096)
+    return procs.prefix(size / stride).compactMap { kp in
+        let pid = kp.kp_proc.p_pid
+        guard pid > 1, proc_pidpath(pid, &buf, UInt32(buf.count)) > 0 else { return nil }
+        return Proc(pid: pid, ppid: kp.kp_eproc.e_ppid, path: String(cString: buf))
     }
+}
 
-    /// Nothing whose own path, or any ancestor's path, starts with one of these
-    /// is ever paused.
-    static let protectedPrefixes: [String] = [
-        "/System/", "/usr/", "/bin/", "/sbin/", "/Library/Apple/", "/private/",
-        "/Library/Application Support/Apple/", "/Library/Developer/CommandLineTools/",
-        Paths.macSteamApp + "/", Paths.macSteamSupport + "/",
-        "/Applications/CrossOver", Paths.bottles + "/",
-        "/Applications/Console Mode.app/", Bundle.main.bundlePath + "/",
-        // Claude (the app, Claude Code, and everything they launched). Pausing
-        // Claude cuts off the controlling session and the phone link.
-        "/Applications/Claude.app/", Paths.home + "/.claude/", Paths.home + "/.local/share/claude/",
-        Paths.home + "/.local/bin/claude", Paths.home + "/Library/Application Support/Claude/",
-    ]
+@MainActor
+final class Freezer {
+    private(set) var frozen: [pid_t] = []
+    var isFrozen: Bool { !frozen.isEmpty }
 
-    /// Process names treated like protected paths (for Claude Code run via node etc.).
-    static let protectedNames: Set<String> = ["claude", "Claude", "ConsoleMode", "loginwindow",
-                                              "WindowServer", "launchd"]
-
-    static func isProtected(_ p: ProcInfo, byPid: [pid_t: ProcInfo]) -> Bool {
-        var cur: ProcInfo? = p
-        var hops = 0
-        while let c = cur, c.pid > 1, hops < 64 {
-            if protectedNames.contains(c.name) { return true }
-            if c.path.isEmpty && c.pid == p.pid { return true } // can't see it: leave it alone
-            if protectedPrefixes.contains(where: { c.path.hasPrefix($0) }) { return true }
-            if c.path.lowercased().contains("/claude") { return true }
-            cur = byPid[c.ppid]
-            hops += 1
-        }
-        return false
-    }
-
-    static func candidates() -> [ProcInfo] {
+    /// What would be paused right now (used by freeze and for dry runs).
+    func candidates() -> [Proc] {
+        let procs = userProcesses()
         let me = getpid()
-        let all = ProcessList.all()
-        let byPid = Dictionary(all.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
-        return all.filter { $0.pid != me && $0.pid > 1 && !isProtected($0, byPid: byPid) }
-    }
-
-    // MARK: freeze / resume
-
-    /// Hide first (a paused app can't hide itself), then record, then pause.
-    @MainActor
-    static func freeze(completion: @escaping @MainActor (Int) -> Void) {
-        let myPid = getpid()
-        var hidden: [String] = []
-        let byPid = Dictionary(ProcessList.all().map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            guard app.processIdentifier != myPid, !app.isHidden,
-                  let info = byPid[app.processIdentifier], !isProtected(info, byPid: byPid)
-            else { continue }
-            if app.hide(), let id = app.bundleIdentifier { hidden.append(id) }
-        }
-        // Give apps a moment to process the hide before they stop running.
-        onMain(after: 0.6) {
-            let victims = candidates().filter { !$0.stopped }
-            let state = State(pids: victims.map(\.pid), hidden: hidden, time: Date().timeIntervalSince1970)
-            guard save(state) else {
-                log("freeze: could not write \(Paths.frozenFile); not pausing anything")
-                completion(0)
-                return
+        let byPid = Dictionary(procs.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        func isProtected(_ p: Proc) -> Bool {
+            // Walk up the parent chain: protected if it, or anything that launched it, is protected.
+            var cur: Proc? = p, hops = 0
+            while let c = cur, hops < 64 {
+                if c.pid == me || protectedPrefixes.contains(where: { c.path.hasPrefix($0) })
+                    || (c.path as NSString).lastPathComponent == "claude" { return true }
+                if c.ppid <= 1 { return false }
+                cur = byPid[c.ppid]; hops += 1
             }
-            for v in victims { kill(v.pid, SIGSTOP) }
-            log("freeze: hid \(hidden.count) apps, paused \(victims.count) processes")
-            completion(victims.count)
-        }
-    }
-
-    /// Resume everything recorded. SIGCONT is harmless on a running process,
-    /// so this is always safe to repeat.
-    @MainActor
-    static func resume() {
-        guard let state = load() else { return }
-        for pid in state.pids { kill(pid, SIGCONT) }
-        for id in state.hidden {
-            for app in NSRunningApplication.runningApplications(withBundleIdentifier: id) { app.unhide() }
-        }
-        try? FileManager.default.removeItem(atPath: Paths.frozenFile)
-        log("resume: \(state.pids.count) processes, \(state.hidden.count) apps unhidden")
-    }
-
-    static var hasFrozenState: Bool { FileManager.default.fileExists(atPath: Paths.frozenFile) }
-
-    static func save(_ s: State) -> Bool {
-        do {
-            try FileManager.default.createDirectory(atPath: Paths.support, withIntermediateDirectories: true)
-            let enc = JSONEncoder()
-            enc.outputFormatting = [.sortedKeys]  // compact: the watchdog greps "pids":[...]
-            try enc.encode(s).write(to: URL(fileURLWithPath: Paths.frozenFile), options: .atomic)
-            return true
-        } catch {
             return false
         }
+        return procs.filter { !isProtected($0) }
     }
 
-    static func load() -> State? {
-        guard let d = FileManager.default.contents(atPath: Paths.frozenFile) else { return nil }
-        return try? JSONDecoder().decode(State.self, from: d)
+    func freeze() {
+        guard !isFrozen else { return }
+        let targets = candidates()
+        frozen = targets.map(\.pid)
+        // Record first, so a crash between here and the kill() calls still gets cleaned up.
+        try? FileManager.default.createDirectory(atPath: supportDir, withIntermediateDirectories: true)
+        let record = targets.map { ["pid": Int($0.pid), "path": $0.path] as [String: Any] }
+        if let data = try? JSONSerialization.data(withJSONObject: record) {
+            try? data.write(to: URL(fileURLWithPath: frozenFile), options: .atomic)
+        }
+        for p in targets { kill(p.pid, SIGSTOP) }
+        let names = Set(targets.map { URL(fileURLWithPath: $0.path).lastPathComponent }).sorted()
+        log("froze \(targets.count) processes: \(names.joined(separator: ", "))")
     }
 
-    // MARK: watchdog LaunchAgent
+    /// Resume everything we (or a previous, crashed run) paused.
+    func resume() {
+        var pids = Set(frozen)
+        if let data = FileManager.default.contents(atPath: frozenFile),
+           let list = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+            pids.formUnion(list.compactMap { ($0["pid"] as? Int).map(pid_t.init) })
+        }
+        guard !pids.isEmpty else { return }
+        for pid in pids { kill(pid, SIGCONT) }
+        try? FileManager.default.removeItem(atPath: frozenFile)
+        frozen = []
+        log("resumed \(pids.count) processes")
+    }
 
+    /// Install the LaunchAgent that resumes paused apps if Console Mode is gone.
     static func installWatchdog() {
-        let script = Paths.resource("watchdog")
+        guard let script = resource("watchdog") else { return }
+        let plistPath = home + "/Library/LaunchAgents/local.consolemode.watchdog.plist"
         let plist: [String: Any] = [
-            "Label": Paths.watchdogLabel,
-            "ProgramArguments": ["/bin/zsh", script],
+            "Label": "local.consolemode.watchdog",
+            "ProgramArguments": [script],
             "StartInterval": 15,
             "RunAtLoad": true,
-            "ProcessType": "Background",
         ]
-        let url = URL(fileURLWithPath: Paths.watchdogPlist)
-        if let existing = NSDictionary(contentsOf: url) as? [String: Any],
-           (existing["ProgramArguments"] as? [String]) == ["/bin/zsh", script] {
-            return  // already installed and pointing at this build
-        }
-        do {
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
-            try data.write(to: url, options: .atomic)
-        } catch {
-            log("watchdog: could not write plist: \(error)")
-            return
-        }
-        let domain = "gui/\(getuid())"
-        run("/bin/launchctl", ["bootout", domain + "/" + Paths.watchdogLabel])
-        let r = run("/bin/launchctl", ["bootstrap", domain, Paths.watchdogPlist])
-        log("watchdog: installed (launchctl bootstrap status \(r.status))")
+        if let existing = NSDictionary(contentsOfFile: plistPath), existing.isEqual(to: plist) { return }
+        (plist as NSDictionary).write(toFile: plistPath, atomically: true)
+        run("/bin/launchctl", ["bootout", "gui/\(getuid())/local.consolemode.watchdog"])
+        run("/bin/launchctl", ["bootstrap", "gui/\(getuid())", plistPath])
+        log("watchdog installed")
     }
 }

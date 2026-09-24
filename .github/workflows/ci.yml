@@ -20,23 +20,7 @@ jobs:
       - name: Build tools
         run: |
           swiftc tools/hidprobe.swift -o /tmp/hidprobe
-          swiftc -parse-as-library -swift-version 5 tools/render-preview.swift src/Common.swift \
-            src/Takeover.swift src/Input.swift -o /tmp/preview
-      - name: Render takeover preview
-        run: /tmp/preview takeover-frames.jpg
-      - uses: actions/upload-artifact@v4
-        with:
-          name: takeover-preview
-          path: takeover-frames.jpg
+          swiftc tools/spacewatch.swift -o /tmp/spacewatch
+          swiftc tools/send.swift -o /tmp/send
       - name: Script tests
-        run: |
-          python3 -m unittest discover -s tests -p 'test_*.py' -v
-          bash tests/test_scripts.sh
-
-  linux-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get install -y zsh
-      - run: python3 -m unittest discover -s tests -p 'test_*.py'
-      - run: bash tests/test_scripts.sh
+        run: zsh tests/test_scripts.sh

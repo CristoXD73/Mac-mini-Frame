@@ -1,18 +1,10 @@
 #!/bin/zsh
-# LaunchAgent safety net (runs every 15 s): if Console Mode paused apps and is
-# no longer running (crash, force quit), resume every recorded pid.
-emulate -L zsh
-FROZEN=${CM_FROZEN:-$HOME/Library/Application Support/Console Mode/frozen.json}
-PROC=${CM_PROC_NAME:-ConsoleMode}
-
-[[ -f $FROZEN ]] || exit 0
-pgrep -x $PROC >/dev/null 2>&1 && exit 0
-
-pids=$(tr -d ' \n\t' < $FROZEN | sed -n 's/.*"pids":\[\([0-9,]*\)\].*/\1/p')
-for pid in ${(s:,:)pids}; do
-  [[ $pid == <-> ]] && kill -CONT $pid 2>/dev/null
-done
-rm -f $FROZEN
-print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [watchdog] resumed: ${pids:-none}" \
-  >> ${CM_LOG:-$HOME/Library/Logs/ConsoleMode.log} 2>/dev/null
-exit 0
+# Console Mode safety net (LaunchAgent, every 15s): if apps were paused for game mode and
+# Console Mode is no longer running (crash, force quit), resume them. SIGCONT is harmless
+# for processes that aren't paused, so this can't hurt anything.
+F="$HOME/Library/Application Support/Console Mode/frozen.json"
+[[ -f "$F" ]] || exit 0
+pgrep -x ConsoleMode >/dev/null && exit 0
+grep -oE '"pid" *: *[0-9]+' "$F" | grep -oE '[0-9]+$' | while read pid; do kill -CONT "$pid" 2>/dev/null; done
+rm -f "$F"
+echo "[watchdog $(date)] Console Mode not running: resumed paused apps" >> "$HOME/Library/Logs/ConsoleMode.log"

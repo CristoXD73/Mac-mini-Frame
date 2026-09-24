@@ -1,49 +1,47 @@
 #!/bin/zsh
-# Builds "Console Mode.app" and installs it to /Applications.
-#   ./build.sh              build + install
-#   ./build.sh --no-install build into ./build only (used by CI)
-emulate -L zsh
-setopt err_exit pipe_fail
+# Build Console Mode.app and install it to /Applications.
+#   ./build.sh            build + install (quits a running Console Mode first)
+#   ./build.sh --no-install   build into ./build only
+set -euo pipefail
+cd "${0:A:h}"
+APP="build/Console Mode.app"
+rm -rf build && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
-here=${0:A:h}
-app_name="Console Mode"
-build=$here/build
-app=$build/$app_name.app
-install=1
-[[ ${1:-} == --no-install ]] && install=0
+echo "• compiling Console Mode"
+swiftc -O -swift-version 5 -o "$APP/Contents/MacOS/ConsoleMode" src/*.swift
 
-arch=$(uname -m)
-target=$arch-apple-macos15.0
-swiftc_flags=(-O -swift-version 5 -target $target)
+echo "• compiling bottle-windows helper"
+swiftc -O -o "$APP/Contents/Resources/bottle-windows" resources/bottle-windows.swift
 
-print "==> compiling ($target)"
-rm -rf $app
-mkdir -p $app/Contents/MacOS $app/Contents/Resources
-swiftc $swiftc_flags -o $app/Contents/MacOS/ConsoleMode $here/src/*.swift \
-  -framework AppKit -framework SwiftUI -framework GameController -framework IOKit
-swiftc $swiftc_flags -o $app/Contents/Resources/bottle-windows $here/resources/bottle-windows.swift
-
-print "==> bundling"
-cp $here/resources/Info.plist $app/Contents/Info.plist
+cp app/Info.plist "$APP/Contents/Info.plist"
+cp app/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 for f in bottle-launch add-game backup-saves watchdog; do
-  cp $here/resources/$f $app/Contents/Resources/$f
-  chmod +x $app/Contents/Resources/$f
+  cp "resources/$f" "$APP/Contents/Resources/$f"; chmod +x "$APP/Contents/Resources/$f"
 done
 
-# Ad-hoc signing normally keys privacy permissions (TCC) on the code hash, so
-# every rebuild would lose Screen Recording. A designated requirement on the
-# bundle id keeps permissions across rebuilds.
-print "==> signing"
-codesign --force --deep --sign - \
-  -r='designated => identifier "local.consolemode"' $app
-codesign --verify --strict $app
+# Ad-hoc signature with a FIXED designated requirement. A plain ad-hoc signature ties macOS
+# privacy permissions (Screen Recording) to the exact binary hash, so every rebuild would
+# silently drop them. Pinning the requirement to the bundle identifier keeps them.
+echo "• signing"
+codesign --force -s - -r='designated => identifier "local.consolemode"' "$APP"
 
-if (( install )); then
-  print "==> installing to /Applications"
-  pkill -x ConsoleMode 2>/dev/null || true
-  rm -rf "/Applications/$app_name.app"
-  cp -R $app /Applications/
-  print "Installed /Applications/$app_name.app"
-else
-  print "Built $app"
+[[ "${1:-}" == "--no-install" ]] && { echo "built: $APP"; exit 0; }
+
+# Never install in the middle of a game-mode session: restarting Console Mode mid-session unpauses
+# and re-pauses every app. frozen.json exists exactly while apps are paused.
+if [[ -f "$HOME/Library/Application Support/Console Mode/frozen.json" && "${1:-}" != "--force" ]]; then
+  echo "✗ Console Mode is in game mode right now; not installing. Exit game mode first (or use --force)."
+  exit 1
 fi
+
+echo "• installing to /Applications"
+# Quit cleanly so Console Mode restores the desktop itself; force-kill only as a last resort.
+osascript -e 'quit app "Console Mode"' 2>/dev/null || true
+for i in {1..40}; do pgrep -x ConsoleMode >/dev/null || break; sleep 0.25; done
+pkill -x ConsoleMode 2>/dev/null && echo "  (had to force-quit Console Mode)" || true
+rm -rf "/Applications/Console Mode.app"
+cp -R "$APP" "/Applications/Console Mode.app"
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "/Applications/Console Mode.app"
+echo "installed: /Applications/Console Mode.app"
+open -g -a "/Applications/Console Mode.app" --args --standby     # back in the background, ready for the Xbox button
+echo "restarted in standby"

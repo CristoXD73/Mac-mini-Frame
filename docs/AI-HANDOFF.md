@@ -1,6 +1,6 @@
 # Mac-mini-Frame: handoff to the next AI
 
-This is the state of the repo as of 2026-09-24, and what to do next. Read it with [`HANDOFF.md`](HANDOFF.md) in this folder. That file is the owner's original design spec for **Console Mode** (hardware, paths, and the findings you must not re-learn). This file says what has been built from that spec, what's verified, and what's left.
+State of the repo as of 2026-09-24 (second update), and what to do next. Read it together with [`HANDOFF.md`](HANDOFF.md). That file is the full design, every finding (§4: *don't re-learn these*), the setup and the test status. This file covers what changed, what's verified and what's left.
 
 ---
 
@@ -8,145 +8,67 @@ This is the state of the repo as of 2026-09-24, and what to do next. Read it wit
 
 | | |
 |---|---|
-| Repo | https://github.com/CristoXD73/Pergolas (the owner may rename it to `Mac-mini-Frame`, and GitHub redirects the old URL) |
-| Owner | GitHub user **CristoXD73** |
-| Visibility | **Public**. Anyone can clone and read it, and CI logs are readable without auth |
-| Branches | Only **`claude/steam-console-macos-perf-4lbx1k`**, which is also the **default branch** (the repo was empty before this work) |
-| Open PRs | None |
-| CI | `.github/workflows/ci.yml`, GitHub Actions, green on commit `84c2bcd` |
+| Repo | https://github.com/CristoXD73/Pergolas (project name: **Mac-mini-Frame**) |
+| Visibility | **Public.** Never commit usernames, account IDs, local IPs, keys or tokens |
+| Branch | **`claude/steam-console-macos-perf-4lbx1k`** (also the default branch). No force-pushes, no PRs unless the owner asks |
+| Install / uninstall | one-liners in the README (`install.sh`, `uninstall.sh` at the repo root) |
 
-### Permissions: what you have and what you need
-
-- **Read:** no credentials needed. `git clone https://github.com/CristoXD73/Pergolas.git`
-- **Write (push, PRs, re-running CI):** needs access **granted by the owner to you**. No credentials are stored in this repo or in this document, and none should ever be committed. The owner can grant access in any of these ways:
-  1. **Claude Code on the web / Claude GitHub App:** the owner connects GitHub at claude.ai and installs the Claude GitHub App on this repo (https://github.com/apps/claude/installations/select_target). The previous work was pushed this way.
-  2. **Another AI's GitHub integration:** the owner installs that tool's GitHub App on `CristoXD73/Pergolas` with *Contents: read & write*, *Pull requests: read & write* and *Actions: read*.
-  3. **Collaborator:** repo Settings → Collaborators → add the bot or person with *Write* role.
-  4. **Fine-grained personal access token:** scoped to this one repo only, with the permissions above and a short expiry. The owner should give it to the AI through that tool's secret or environment settings, **never** in chat or in a file.
-- **Push rules the previous AI followed:** work on `claude/steam-console-macos-perf-4lbx1k`, no force-pushes, and no PRs unless the owner asks. Commit messages end with a co-author line.
+Write access comes from the owner (Claude GitHub App, a collaborator invite, or a repo-scoped token given through the tool's secret settings, never in chat or a file). Commit messages end with a co-author line.
 
 ---
 
-## 2. What the project is
+## 2. What changed in this update, and why
 
-The owner has a Mac mini (Apple M6, macOS 27, two 1080p displays, Xbox Wireless Controller over Bluetooth) and plays Windows games through a **CrossOver GPTK4 bottle named `Steam`**. **Console Mode** makes the Mac act like a console, driven by the controller:
+The previous commit (`84c2bcd`) was a clean CI-tested **rebuild of the first handoff**. Nothing in it had run on the owner's Mac. This update replaces it with the version **developed and debugged live on the owner's Mac mini with the real controller** (a local Claude Code session on the Mac, 2026-09-24). Main differences:
 
-- **Press the Xbox button:** other apps are hidden and paused (SIGSTOP). The other displays show a starfield. **Native Mac Steam Big Picture** opens on the main display, and bottle games appear there as tiles.
-- **Hold the Xbox button 6 s:** back to the desktop. The game and both Steam clients close, and everything resumes.
-- **Xbox + D-pad up/down** changes volume, **Xbox + Y** toggles the stats overlay, and **Xbox + View** takes a screenshot.
-- Save folders are backed up after each game.
-
-The key design decision (HANDOFF.md §4.1): the **bottle's** Big Picture is stuck at 12–20 fps. Windows Steam forces `--disable-gpu` on macOS, and nothing outside Steam fixes it. So the menu is **Mac** Steam, and each tile runs `bottle-launch`, which starts the game inside the bottle.
-
----
-
-## 3. History
-
-| Commit | What |
+| Area | Now |
 |---|---|
-| `bb05746`, `a68b84f` | First attempt: `steam-tune`, a bash CLI that tuned the bottle (registry keys like `GPUAccelWebViewsV3=0`, CEF flags, MSync). **Superseded and deleted.** The owner's handoff showed these tweaks don't help the bottle's Big Picture (HANDOFF.md §4.1). Don't revive it. |
-| `069d989` | Project renamed to **Mac-mini-Frame** at the owner's request |
-| `c87e403` | **Console Mode rebuilt from HANDOFF.md**: all Swift sources, resource scripts, build script, tools, tests, CI |
-| `84c2bcd` | Fixed the one Swift 6 compile error (main-actor isolation of startup), added the README. CI green |
+| Controller | HID matches **only the gamepad interface** (usage page 1, usage 5/4). The Xbox controller's keyboard-like interface disconnects on every Xbox press and needs Input Monitoring; matching it broke the exit hold and made connecting random (HANDOFF §4 #29). |
+| Start | Console Mode stays resident (**standby** LaunchAgent at login, Mac Steam preloaded with `-silent`). Big Picture is parked through Accessibility on exit, and re-entry takes ~1 s. Every start path behaves the same (#15–17, #28). |
+| Games | Every Mac Steam tile is a small **wrapper `.app`** (Mac Steam can't launch scripts, #23). Launch screen, then Space-aware hand-off with **"Scooting over to your game…"** (#30), no duplicate instances, one game at a time (#24). |
+| Features | **Quick Resume** (Xbox+X), **force quit** (Xbox+Menu+View ×2), **Save Rewind** (Xbox+LB, snapshots while playing plus restore with undo), glass **HUD** (Core Audio volume, exit ring), **Now Playing** card, battery/storage chip, optional audio routing |
+| Safety | `build.sh` refuses to install during game mode and always quits cleanly. The watchdog resumes paused apps if Console Mode dies. The bottle-Steam warm-up and persistent `wineserver -p` were removed (they took the controller and blocked the CrossOver app, #26–27). |
+| Portability | `gamesDrive` and `backupDest` come from `config.json` (defaults are the owner's `/Volumes/circular` and `/Volumes/Storage/...`) |
+| Install | `install.sh` (requirement checks, clone or update to `~/Mac-mini-Frame`, build, standby) and `uninstall.sh` (resumes paused apps, removes agents, **only** Console Mode's tiles (`add-game --uninstall`), and the app; save backups are kept unless `--purge`) |
 
-The owner confirmed this is the route: "That the route we are taking update the repo with this".
-
----
-
-## 4. Repo layout (what exists now)
-
-```
-build.sh                  zsh; builds build/Console Mode.app, signs it with
-                          designated requirement identifier "local.consolemode",
-                          installs to /Applications (skip with --no-install)
-src/
-  Common.swift            Paths constants (HANDOFF §9), log(), run()/spawn(),
-                          bringToFront() (cooperative activation), onMain() helpers,
-                          window scanning (gameWindowOwner, bigPictureReady),
-                          ProcessList (sysctl KERN_PROC_UID + proc_pidpath)
-  Freezer.swift           hide → write frozen.json → SIGSTOP; resume; protection
-                          rules (system paths, Steam, CrossOver, Console Mode, Claude,
-                          checked on the process AND its ancestors); watchdog installer
-  Input.swift             IOHID (vendors 045E/054C/28DE): home = page 0x09 usage 0x0D,
-                          hat = page 0x01 usage 0x39; 6 s hold timer; other button
-                          cancels; GameController for Y / View(buttonOptions); de-dup
-  Takeover.swift          controller outlines (400x260 box), starfield renderer
-                          (timeline per HANDOFF §7), Takeover windows on non-main
-                          displays at CGShieldingWindowLevel, LoadingCover
-  Overlays.swift          Toast (+ screenshot flash), StatsOverlay (CPU, GPU via
-                          IOAccelerator PerformanceStatistics, RAM, clock)
-  Power.swift             display-sleep assertion, optional "Console Mode On/Off" Shortcuts
-  main.swift              Controller state machine: desktop → starting → game → exiting
-resources/                (copied into the .app's Contents/Resources)
-  Info.plist              LSUIElement, bundle id local.consolemode, exec ConsoleMode, macOS 15+
-  bottle-launch           zsh: `steam <appid>` | `exe <path>`; waits ≤180 s for a window,
-                          then until it's gone 6 s in a row
-  bottle-windows.swift    prints the owner of a large on-screen *.exe window (not Steam's own)
-  add-game                python3: binary shortcuts.vdf writer; add / --list / --remove /
-                          --sync / --check (exit 10); cover art copy; tag "Bottle Steam"
-  backup-saves            python3: read-only, verified save backups (HANDOFF §6)
-  watchdog                zsh LaunchAgent script (every 15 s)
-tools/                    hidprobe.swift, render-preview.swift, cdp.js, prof.js
-tests/                    test_add_game.py (13), test_backup_saves.py (6), test_scripts.sh (14)
-docs/HANDOFF.md           the owner's original spec (source of truth for behaviour)
-docs/AI-HANDOFF.md        this file
-```
-
-Things added beyond the spec (all small):
-
-- **Environment overrides for testing.** Scripts read `CM_BOTTLE`, `CM_MAC_STEAM`, `CM_LAUNCHER`, `CM_HOME`, `CM_BACKUP_DEST`, `CM_WINE`, `CM_BOTTLE_WINDOWS`, `CM_LOG`, `CM_FROZEN`, `CM_PROC_NAME`, and timing values like `CM_GONE_SECS`. Real use needs none of them.
-- **Signal handler** in `main.swift`: SIGTERM, SIGINT and SIGHUP resume the paused pids before exit.
-- **Exit-to-PC shuts the bottle down by path.** It sends SIGTERM, then SIGKILL after 4 s, to every process under `CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/`. It does not touch the CrossOver UI app.
-- **Screenshots use `/usr/sbin/screencapture -D1`.** `CGDisplayCreateImage` is unavailable in the macOS 15 SDK. It still needs Screen Recording permission.
-- **The app keeps the name "Console Mode"** (bundle `local.consolemode`), so the owner's existing Home-button mapping, TCC permission, watchdog label and backup folders still work. Only the repo/project is called Mac-mini-Frame.
+The previous rebuild's Python tests covered its own `CM_*`-hookable scripts and don't apply to these, so they were replaced by `tests/test_scripts.sh`. That script covers syntax of every script, the Save Rewind round trip (restore, undo, the guard), tile wrappers (create, list, lookup, uninstall keeping foreign shortcuts) and watchdog recovery. It runs in a throwaway home folder.
 
 ---
 
-## 5. What's verified and what isn't
+## 3. Verified on the owner's Mac (real controller, real games)
 
-**Verified by CI on `macos-15` (arm64, Swift 6.1.2 in Swift 5 mode, Python 3.14):**
+- Xbox press → game mode (0.1–1 s warm, ~5 s cold). A **real 6 s hold exits** once the gamepad-only fix is in place (log `13:21:57 → 13:22:03`). 5/5 restarts connect to the controller instantly.
+- Pausing and resuming (35–43 processes; Claude and Steam protected), takeover on the second display, Big Picture leaves the screen on exit, focus returns to the previous app.
+- Volume (Core Audio, 16 steps, hold-repeat), stats overlay, the glass HUD.
+- Tiles: `add-game` wrappers launch through Mac Steam with no "choose an app" dialog. Portal 2 (bottle Steam) launched with the launch screen, "Scooting over", and the game in front (recorded every 100 ms with `tools/spacewatch.swift`). The duplicate-launch guard, and the Steam tile list and art, were verified inside Big Picture over the DevTools protocol.
+- Save backups found and verified for real games. The Rewind restore/undo round trip passes.
 
-- The app compiles with no warnings, and `bottle-windows` compiles and runs.
-- The bundle is signed with the designated requirement, and `plutil -lint` passes.
-- `tools/hidprobe.swift` and `tools/render-preview.swift` compile, and the preview renders. It's uploaded as the `takeover-preview` artifact on each run.
-- All 33 script tests pass on macOS and Ubuntu. Coverage:
-  - VDF round-trip and the appid formula (`crc32('"<launcher>"' + name) | 0x80000000`)
-  - sync and check (including libraries on `D:` through `dosdevices`), and skipping redistributables and partial installs
-  - cover art, for both the new and old librarycache layouts
-  - not clobbering the user's own shortcuts
-  - backup-saves: sources are byte-for-byte untouched, skip lists, the 15-backup limit, duplicate detection, no backup after failed verification
-  - bottle-launch timing and tolerating window flicker
-  - watchdog resume
+## 4. Not verified yet
 
-**NOT verified. Nothing has run on the owner's Mac yet:**
+1. Quick Resume, force quit and Save Rewind **with the physical controller on a running game** (logic tested; buttons not pressed live).
+2. The **Now Playing** card and **launch screen** with real art during a real game (only preview renders were reviewed).
+3. The **"Scooting over"** fallback for a game whose window never reaches the current Space (the timing logic works in the Portal 2 recording).
+4. PlayStation and Steam controllers, audio routing (only one output device on the test Mac), Focus Shortcuts, and Remote Play pairing.
+5. `install.sh` on a clean Mac (it was run from a checkout only).
+6. Steam's own **Guide-hold Power Menu** also opens during the 6 s exit hold. That's harmless but ugly; the fix is probably a Steam controller setting (open item).
 
-1. The whole app flow with the real controller: entering game mode, the 6-second exit, combos, pausing and resuming apps, the starfield on the second display, Big Picture detection (`bigPictureReady()` uses an ≥80%-of-main-display window heuristic).
-2. HANDOFF.md §8's open items: screenshots (needs Screen Recording granted), launching a real bottle game from a Mac Steam tile, double input from Steam Input, PlayStation and Steam controllers (HID usage 13 is assumed), and the Focus Shortcuts.
-3. `add-game --sync` against the owner's real bottle library and Mac Steam `userdata`. Also whether Mac Steam's art file naming matches (`<id>p.jpg`, `<id>.jpg`, `<id>_hero.jpg`, `<id>_logo.png`).
-4. The controller outline shapes are approximations. The Steam controller shape was meant to match a reference photo that wasn't available.
-5. `Freezer` protection in practice. Check the log line `freeze: hid N apps, paused M processes` against the handoff's 35–39 processes, and confirm that Claude Code sessions (including the qemu VM in HANDOFF §4.10) are never paused.
+## 5. Suggested next steps
 
----
+1. Confirm §4 items 1–3 with the owner holding the controller. Read `~/Library/Logs/ConsoleMode.log`: every Xbox up/down and interface removal is logged (`hid: …`).
+2. Look into the Guide-hold Power Menu in Steam's controller settings.
+3. Keep `tests/test_scripts.sh` green, and add a test for every script change.
 
-## 6. Suggested next steps
-
-1. On the Mac: `./build.sh`, then do the one-time setup in HANDOFF.md §5 (Home button → Console Mode, Screen Recording, remove Mac Steam from Login Items).
-2. Press the Xbox button, watch `~/Library/Logs/ConsoleMode.log`, and work through §5 above.
-3. Run `python3 "/Applications/Console Mode.app/Contents/Resources/add-game" --check`, then `--sync` with Mac Steam closed, and confirm the tiles and art in Big Picture.
-4. Launch one real bottle game from a tile (not the Cyberpunk repack; see the ground rules), and confirm that game-to-front, returning to Big Picture and the save backup all work.
-5. Fix what breaks. Keep the tests green (`python3 -m unittest discover -s tests -p 'test_*.py'`, `bash tests/test_scripts.sh`) and let CI compile the Swift if you're not on a Mac.
-
-## 7. Owner's ground rules (from HANDOFF.md §10, still binding)
+## 6. Ground rules (from the owner, binding)
 
 - Never use the `/Volumes/Expansion` drive.
-- The console look must never appear on the play (main) screen. Other screens are taken over, never switched off.
-- Pausing everything is fine ("nuclear is fine"), with no exceptions for Discord or music. Claude, Steam, CrossOver and system processes stay protected.
-- Don't pop test windows (such as Notepad stand-ins) on the owner's screen without saying so.
-- Don't launch the Cyberpunk repack or add it as a tile. The owner can add any exe themselves with `add-game`.
-- Don't try to bypass Steam's integrity check (no CRC forging of `steamwebhelper.exe`).
+- The console look never appears on the play (main) screen. Other screens are taken over, never turned off.
+- Pausing everything is fine ("nuclear"). Claude, Steam, CrossOver and system processes stay protected.
+- **Test on real hardware, not just scripts.** Scripted tests inject input above the layer that failed (HANDOFF #27). Say plainly what couldn't be verified.
+- Don't install while the owner is in game mode, and don't pop test windows on their screen without saying so.
+- Only add games the owner has a right to play. Don't add or launch pirated copies; `add-game` is for their own games.
+- Don't bypass Steam's integrity checks (no CRC forging of `steamwebhelper.exe`).
 
-## 8. Communication notes
+## 7. Communication notes
 
-- The owner writes short messages, often from a phone, and prefers action over questions.
-- They asked for the project name **Mac-mini-Frame**.
-- They offered their Mac for testing. The previous session had no computer-use access, so testing happened in CI only.
+- The owner writes short messages, often from a phone, and prefers action over questions, but wants evidence (logs, recordings, screenshots), not assumptions.
+- Project name: **Mac-mini-Frame**. The app keeps the name **Console Mode** (bundle `local.consolemode`) so existing permissions and the Home-button mapping keep working.

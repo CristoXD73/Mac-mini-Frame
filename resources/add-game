@@ -1,401 +1,283 @@
 #!/usr/bin/env python3
-"""Manage Mac Steam non-Steam shortcuts that launch games inside the CrossOver bottle.
+"""Add a Windows game from the CrossOver "Steam" bottle to Mac Steam as a non-Steam game,
+so it shows up in (native, GPU-rendered) Big Picture and launches through the bottle.
 
-    add-game "Name" exe "/path/to/game.exe"
-    add-game "Name" steam <appid>
-    add-game --list
-    add-game --remove "Name"
-    add-game --sync     mirror every game installed in the bottle's Steam
-    add-game --check    exit 10 if --sync has work to do (safe while Steam runs)
+  add-game "Game Name" exe "/path/to/game.exe"
+  add-game "Game Name" steam <appid>        # a game installed through the bottle's Steam
+  add-game --list
+  add-game --remove "Game Name"
+  add-game --sync        # mirror every game installed in the bottle's Steam (Console Mode runs this)
+  add-game --check       # exit code 10 if --sync has something to do (works while Steam is open)
+  add-game --lookup <shortcut appid>   # print the tile's name (used by bottle-launch)
+  add-game --uninstall   # remove every tile Console Mode created (and its art); your own shortcuts stay
 
-Writes userdata/<id>/config/shortcuts.vdf in Steam's binary VDF format.
-Mac Steam must be closed when writing: it rewrites the file on exit.
-"""
-import binascii
-import os
-import re
-import shutil
-import struct
-import subprocess
-import sys
+Mac Steam must be closed (it rewrites shortcuts.vdf on exit)."""
+import glob, os, re, shlex, shutil, struct, subprocess, sys, zlib
 
-HOME = os.path.expanduser("~")
-BOTTLE = os.environ.get(
-    "CM_BOTTLE", os.path.join(HOME, "Library/Application Support/CrossOver/Bottles/Steam"))
-MAC_STEAM = os.environ.get("CM_MAC_STEAM", os.path.join(HOME, "Library/Application Support/Steam"))
-LAUNCHER = os.environ.get(
-    "CM_LAUNCHER", os.path.join(os.path.dirname(os.path.abspath(__file__)), "bottle-launch"))
+LAUNCHER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bottle-launch")
+# Mac Steam can only launch .app bundles as non-Steam games (anything else makes macOS ask which
+# app should open it). Each tile therefore gets a tiny wrapper app that runs bottle-launch.
+TILES = os.path.expanduser("~/Library/Application Support/Console Mode/Tiles")
+USERDATA = os.path.expanduser("~/Library/Application Support/Steam/userdata")
+BOTTLE = os.path.expanduser("~/Library/Application Support/CrossOver/Bottles/Steam")
+BOTTLE_STEAM = os.environ.get("BOTTLE_STEAM_DIR", BOTTLE + "/drive_c/Program Files (x86)/Steam")
 SYNC_TAG = "Bottle Steam"
-EXIT_NEEDS_SYNC = 10
-
-# Steam's own tools and runtimes that show up as "installed apps".
-REDIST_APPIDS = {"228980", "1007", "1070560", "1391110", "1628350", "1493710", "250820"}
-REDIST_NAME = re.compile(r"redistributable|redist|runtime|directx|vc\+\+|proton|steamvr|sdk\b", re.I)
-
-BOTTLE_STEAM_DIRS = ("drive_c/Program Files (x86)/Steam", "drive_c/Program Files/Steam")
+# Redistributables and runtimes that install like games but aren't playable.
+NOT_GAMES = {"228980", "1070560", "1391110", "1493710", "1628350", "1826330", "2180100"}
 
 
-def die(msg, code=1):
-    print(f"add-game: {msg}", file=sys.stderr)
-    sys.exit(code)
+# Steam's binary VDF: 0x00 = nested map, 0x01 = string, 0x02 = int32, 0x08 = end of map.
+def read_map(b, i):
+    out = {}
+    while b[i] != 0x08:
+        t = b[i]; i += 1
+        j = b.index(0, i); key = b[i:j].decode("utf-8", "replace"); i = j + 1
+        if t == 0x00:
+            out[key], i = read_map(b, i)
+        elif t == 0x01:
+            j = b.index(0, i); out[key] = b[i:j].decode("utf-8", "replace"); i = j + 1
+        elif t == 0x02:
+            out[key] = struct.unpack("<i", b[i:i + 4])[0]; i += 4
+        else:
+            raise ValueError(f"unknown VDF type {t:#x}")
+    return out, i + 1
 
 
-# ---------------------------------------------------------------- binary VDF
-
-def _read_cstr(data, i):
-    j = data.index(b"\x00", i)
-    return data[i:j].decode("utf-8", "replace"), j + 1
-
-
-def vdf_load(data):
-    """Parse binary VDF into nested dicts (ints stay ints)."""
-    def parse_map(i):
-        out = {}
-        while True:
-            t = data[i]
-            i += 1
-            if t == 0x08:
-                return out, i
-            key, i = _read_cstr(data, i)
-            if t == 0x00:
-                out[key], i = parse_map(i)
-            elif t == 0x01:
-                out[key], i = _read_cstr(data, i)
-            elif t == 0x02:
-                out[key] = struct.unpack_from("<i", data, i)[0]
-                i += 4
-            else:
-                raise ValueError(f"unsupported VDF type 0x{t:02x} at {i - 1}")
-
-    if not data:
-        return {"shortcuts": {}}
-    result, _ = parse_map(0)
-    return result
+def write_map(m):
+    out = b""
+    for k, v in m.items():
+        kb = k.encode() + b"\0"
+        if isinstance(v, dict):
+            out += b"\x00" + kb + write_map(v)
+        elif isinstance(v, int):
+            out += b"\x02" + kb + struct.pack("<i", v)
+        else:
+            out += b"\x01" + kb + str(v).encode() + b"\0"
+    return out + b"\x08"
 
 
-def vdf_dump(obj):
-    out = bytearray()
-
-    def dump_map(m):
-        for k, v in m.items():
-            kb = k.encode("utf-8") + b"\x00"
-            if isinstance(v, dict):
-                out.extend(b"\x00" + kb)
-                dump_map(v)
-            elif isinstance(v, int):
-                out.extend(b"\x02" + kb + struct.pack("<i", v))
-            else:
-                out.extend(b"\x01" + kb + str(v).encode("utf-8") + b"\x00")
-        out.append(0x08)
-
-    dump_map(obj)
-    return bytes(out)
+def shortcuts_files():
+    return [os.path.join(d, "config", "shortcuts.vdf") for d in glob.glob(os.path.join(USERDATA, "*")) if d.split("/")[-1].isdigit() and d.split("/")[-1] != "0"]
 
 
-# ------------------------------------------------------------- text VDF (acf)
-
-def text_vdf(text):
-    """Minimal parser for Valve's text KeyValues (acf, libraryfolders.vdf)."""
-    tokens = re.findall(r'"((?:[^"\\]|\\.)*)"|([{}])', text)
-    pos = 0
-
-    def parse():
-        nonlocal pos
-        out = {}
-        while pos < len(tokens):
-            s, brace = tokens[pos]
-            pos += 1
-            if brace == "}":
-                return out
-            key = s.replace("\\\\", "\\")
-            s2, brace2 = tokens[pos]
-            pos += 1
-            if brace2 == "{":
-                out[key] = parse()
-            else:
-                out[key] = s2.replace("\\\\", "\\")
-        return out
-
-    return parse()
+def load(path):
+    if not os.path.exists(path):
+        return {}
+    b = open(path, "rb").read()
+    root, _ = read_map(b, 0)
+    return root.get("shortcuts", {})
 
 
-# ----------------------------------------------------------------- shortcuts
-
-def shortcut_appid(exe_field, name):
-    """Steam's id for a non-Steam shortcut, as an unsigned 32-bit int."""
-    return (binascii.crc32((exe_field + name).encode("utf-8")) & 0xFFFFFFFF) | 0x80000000
-
-
-def signed32(u):
-    return u - (1 << 32) if u >= (1 << 31) else u
+def save(path, shortcuts):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    ordered = {str(i): v for i, v in enumerate(shortcuts.values())}
+    open(path, "wb").write(write_map({"shortcuts": ordered}) + b"\x08")
 
 
-def userdata_dir():
-    base = os.path.join(MAC_STEAM, "userdata")
-    forced = os.environ.get("CM_USERDATA_ID")
-    if forced:
-        return os.path.join(base, forced)
-    if not os.path.isdir(base):
-        die(f"no Mac Steam userdata at {base} — sign in to Mac Steam once first")
-    ids = [d for d in os.listdir(base) if d.isdigit() and d != "0"]
-    if not ids:
-        die(f"no Steam user in {base}")
-    if len(ids) == 1:
-        return os.path.join(base, ids[0])
-    # Several accounts: use the most recent login.
-    try:
-        with open(os.path.join(MAC_STEAM, "config/loginusers.vdf"), encoding="utf-8") as f:
-            users = text_vdf(f.read()).get("users", {})
-        for sid, info in users.items():
-            if str(info.get("MostRecent", "0")) == "1":
-                acct = str(int(sid) - 76561197960265728)
-                if acct in ids:
-                    return os.path.join(base, acct)
-    except (OSError, ValueError):
-        pass
-    return os.path.join(base, max(ids, key=lambda d: os.path.getmtime(os.path.join(base, d))))
+def wrapper_path(name):
+    safe = "".join(ch if ch.isalnum() or ch in " -_." else "_" for ch in name).strip() or "Game"
+    return os.path.join(TILES, safe + ".app")
 
 
-def shortcuts_path():
-    return os.path.join(userdata_dir(), "config", "shortcuts.vdf")
+def shortcut_appid(name):
+    return (zlib.crc32((f'"{wrapper_path(name)}"' + name).encode()) & 0xFFFFFFFF) | 0x80000000
 
 
-def load_shortcuts():
-    p = shortcuts_path()
-    if not os.path.exists(p):
-        return []
-    with open(p, "rb") as f:
-        root = vdf_load(f.read())
-    sc = root.get("shortcuts", {})
-    return [sc[k] for k in sorted(sc, key=lambda k: int(k) if k.isdigit() else 0)]
+def make_wrapper(name, launch_opts):
+    """Write <Tiles>/<name>.app whose executable runs bottle-launch with this tile's target."""
+    app = wrapper_path(name)
+    macos = os.path.join(app, "Contents", "MacOS")
+    os.makedirs(macos, exist_ok=True)
+    kind, _, target = launch_opts.partition(" ")
+    target = target.strip().strip('"')
+    q = lambda v: "'" + v.replace("'", "'\\''") + "'"
+    script = "\n".join([
+        "#!/bin/zsh",
+        f"# Console Mode tile for {name}: runs the game inside the CrossOver bottle.",
+        f"export CM_TILE_NAME={q(name)}",
+        f"export CM_TILE_SHORTCUT={shortcut_appid(name)}",
+        f"exec {q(LAUNCHER)} {kind} {q(target)}",
+        ""])
+    path = os.path.join(macos, "launch")
+    open(path, "w").write(script); os.chmod(path, 0o755)
+    bid = "local.consolemode.tile." + format(shortcut_appid(name), "x")
+    plist = f"""<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>{name}</string>
+<key>CFBundleIdentifier</key><string>{bid}</string>
+<key>CFBundleExecutable</key><string>launch</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSUIElement</key><true/>
+</dict></plist>
+"""
+    open(os.path.join(app, "Contents", "Info.plist"), "w").write(plist)
+    subprocess.run(["codesign", "--force", "-s", "-", app], capture_output=True)
+    return app
 
 
-def save_shortcuts(entries):
-    if mac_steam_running():
-        die("Mac Steam is running — quit it first (it rewrites shortcuts.vdf on exit)")
-    p = shortcuts_path()
-    os.makedirs(os.path.dirname(p), exist_ok=True)
-    data = vdf_dump({"shortcuts": {str(i): e for i, e in enumerate(entries)}})
-    tmp = p + ".tmp"
-    with open(tmp, "wb") as f:
-        f.write(data)
-    if os.path.exists(p) and not os.path.exists(p + ".bak"):
-        shutil.copy2(p, p + ".bak")
-    os.replace(tmp, p)
-
-
-def mac_steam_running():
-    if os.environ.get("CM_ASSUME_STEAM_CLOSED") == "1":
-        return False
-    return subprocess.run(["pgrep", "-x", "steam_osx"], capture_output=True).returncode == 0
-
-
-def make_entry(name, kind, target, tags=()):
-    exe_field = f'"{LAUNCHER}"'
-    if kind == "steam":
-        opts = f"steam {target}"
-    else:
-        opts = f'exe "{target}"'
-    appid = shortcut_appid(exe_field, name)
+def entry(name, launch_opts, tags=("Windows (CrossOver)",)):
+    app = make_wrapper(name, launch_opts)
     return {
-        "appid": signed32(appid),
-        "AppName": name,
-        "Exe": exe_field,
-        "StartDir": f'"{os.path.dirname(LAUNCHER)}/"',
-        "icon": "",
-        "ShortcutPath": "",
-        "LaunchOptions": opts,
-        "IsHidden": 0,
-        "AllowDesktopConfig": 1,
-        "AllowOverlay": 1,
-        "OpenVR": 0,
-        "Devkit": 0,
-        "DevkitGameID": "",
-        "DevkitOverrideAppID": 0,
-        "LastPlayTime": 0,
-        "FlatpakAppID": "",
-        "tags": {str(i): t for i, t in enumerate(tags)},
+        "appid": struct.unpack("<i", struct.pack("<I", shortcut_appid(name)))[0], "AppName": name, "Exe": f'"{app}"',
+        "StartDir": f'"{TILES}"', "icon": "", "ShortcutPath": "", "LaunchOptions": "",
+        "IsHidden": 0, "AllowDesktopConfig": 1, "AllowOverlay": 1, "OpenVR": 0, "Devkit": 0, "DevkitGameID": "",
+        "DevkitOverrideAppID": 0, "LastPlayTime": 0, "FlatpakAppID": "", "tags": {str(i): t for i, t in enumerate(tags)},
+        "ConsoleModeTarget": launch_opts,
     }
 
 
-def entry_tags(e):
-    return list(e.get("tags", {}).values())
+def target_of(v):
+    """A tile's 'steam <appid>' / 'exe "<path>"' target: our own field, else the wrapper app's
+    script (Steam may drop unknown fields when it rewrites the file), else old-style LaunchOptions."""
+    if v.get("ConsoleModeTarget"):
+        return v["ConsoleModeTarget"]
+    script = os.path.join(v.get("Exe", "").strip('"'), "Contents", "MacOS", "launch")
+    try:
+        for line in open(script):
+            if line.startswith("exec "):
+                parts = shlex.split(line)[1:]          # [launcher, kind, target]
+                if len(parts) == 3:
+                    return f'{parts[1]} {parts[2]}' if parts[1] == "steam" else f'exe "{parts[2]}"'
+    except OSError:
+        pass
+    return v.get("LaunchOptions", "")
 
 
-def unsigned_appid(e):
-    return e["appid"] & 0xFFFFFFFF
+def migrate(sc):
+    """Older tiles pointed Steam straight at the bottle-launch script: give them wrapper apps."""
+    changed = False
+    for k, v in list(sc.items()):
+        if v.get("Exe", "").strip('"') == LAUNCHER:
+            sc[k] = entry(v["AppName"], v.get("LaunchOptions", ""), tuple(v.get("tags", {}).values()) or ("Windows (CrossOver)",))
+            changed = True
+    return changed
 
 
-# ------------------------------------------------------ bottle Steam library
-
-def bottle_steam_dir():
-    for d in BOTTLE_STEAM_DIRS:
-        p = os.path.join(BOTTLE, d)
-        if os.path.isdir(p):
-            return p
-    return None
+def vdf_values(text, key):
+    return re.findall(r'"%s"\s+"([^"]*)"' % re.escape(key), text)
 
 
-def win_to_mac(path):
-    """Map a Windows path from the bottle (e.g. D:\\SteamLibrary) to a Mac path."""
-    m = re.match(r"^([A-Za-z]):[\\/]*(.*)$", path)
-    if not m:
-        return path
-    drive, rest = m.group(1).lower(), m.group(2).replace("\\", "/")
-    base = os.path.join(BOTTLE, "dosdevices", f"{drive}:")
-    return os.path.join(os.path.realpath(base), rest) if rest else os.path.realpath(base)
+def mac_path(win):
+    """C:\\foo or D:\\foo inside the bottle -> macOS path, via the bottle's drive letters."""
+    win = win.replace("\\\\", "\\")
+    if len(win) < 2 or win[1] != ":":
+        return win
+    drive = os.path.join(BOTTLE, "dosdevices", win[:2].lower())
+    return os.path.realpath(drive) + win[2:].replace("\\", "/")
 
 
-def installed_bottle_games():
-    """[(appid, name, install_dir_on_mac)] for fully installed games in the bottle."""
-    steam = bottle_steam_dir()
-    if not steam:
-        return []
-    libs = [os.path.join(steam, "steamapps")]
-    lf = os.path.join(steam, "steamapps", "libraryfolders.vdf")
-    if os.path.exists(lf):
-        with open(lf, encoding="utf-8", errors="replace") as f:
-            folders = text_vdf(f.read()).get("libraryfolders", {})
-        for v in folders.values():
-            if isinstance(v, dict) and v.get("path"):
-                p = os.path.join(win_to_mac(v["path"]), "steamapps")
-                if os.path.realpath(p) not in map(os.path.realpath, libs):
-                    libs.append(p)
+def bottle_games():
+    """{appid: name} for every game installed in the bottle's Steam, across all its library folders."""
+    try:
+        folders = open(os.path.join(BOTTLE_STEAM, "steamapps", "libraryfolders.vdf"), encoding="utf-8").read()
+    except OSError:
+        return {}
     games = {}
-    for lib in libs:
-        if not os.path.isdir(lib):
-            continue
-        for fn in sorted(os.listdir(lib)):
-            if not (fn.startswith("appmanifest_") and fn.endswith(".acf")):
-                continue
-            try:
-                with open(os.path.join(lib, fn), encoding="utf-8", errors="replace") as f:
-                    st = text_vdf(f.read()).get("AppState", {})
-            except OSError:
-                continue
-            appid, name = str(st.get("appid", "")), st.get("name", "")
-            flags = int(st.get("StateFlags", "0") or 0)
-            if not appid or not name or not (flags & 4):  # 4 = fully installed
-                continue
-            if appid in REDIST_APPIDS or REDIST_NAME.search(name):
-                continue
-            games[appid] = (appid, name, os.path.join(lib, "common", st.get("installdir", "")))
-    return sorted(games.values(), key=lambda g: g[1].lower())
+    for lib in vdf_values(folders, "path"):
+        lib = lib if lib.startswith("/") else mac_path(lib)
+        for f in glob.glob(os.path.join(lib, "steamapps", "appmanifest_*.acf")):
+            m = open(f, encoding="utf-8", errors="replace").read()
+            ids, names = vdf_values(m, "appid"), vdf_values(m, "name")
+            if ids and names and ids[0] not in NOT_GAMES:
+                games[ids[0]] = names[0]
+    return games
 
 
-def copy_art(appid, shortcut_id):
-    """Copy the bottle's cached library art to Mac Steam's grid folder."""
-    steam = bottle_steam_dir()
-    if not steam:
-        return
-    cache = os.path.join(steam, "appcache", "librarycache")
-    wanted = {  # grid filename suffix -> candidate source names
-        "p.jpg": ("library_600x900.jpg", "library_capsule.jpg"),
-        ".jpg": ("header.jpg", "library_header.jpg"),
-        "_hero.jpg": ("library_hero.jpg",),
-        "_logo.png": ("logo.png",),
-    }
-    found = {}
-    appdir = os.path.join(cache, appid)
-    if os.path.isdir(appdir):  # newer layout: librarycache/<appid>/[<hash>/]<file>
-        for root, _, files in os.walk(appdir):
-            for f in files:
-                found.setdefault(f, os.path.join(root, f))
-    if os.path.isdir(cache):   # older layout: librarycache/<appid>_<file>
-        for f in os.listdir(cache):
-            if f.startswith(appid + "_"):
-                found.setdefault(f[len(appid) + 1:], os.path.join(cache, f))
-    grid = os.path.join(userdata_dir(), "config", "grid")
-    for suffix, names in wanted.items():
-        for n in names:
-            if n in found:
-                os.makedirs(grid, exist_ok=True)
-                shutil.copyfile(found[n], os.path.join(grid, f"{shortcut_id}{suffix}"))
-                break
+def copy_art(steam_appid, shortcut_id, grid_dir):
+    """Reuse the cover art the bottle's Steam already downloaded (portrait, wide, hero, logo)."""
+    cache = os.path.join(BOTTLE_STEAM, "appcache", "librarycache", steam_appid)
+    wanted = {"library_600x900.jpg": f"{shortcut_id}p.jpg", "header.jpg": f"{shortcut_id}.jpg",
+              "library_hero.jpg": f"{shortcut_id}_hero.jpg", "logo.png": f"{shortcut_id}_logo.png"}
+    os.makedirs(grid_dir, exist_ok=True)
+    for root, _, files in os.walk(cache):
+        for f in files:
+            if f in wanted and not os.path.exists(os.path.join(grid_dir, wanted[f])):
+                shutil.copyfile(os.path.join(root, f), os.path.join(grid_dir, wanted[f]))
 
 
-# -------------------------------------------------------------------- sync
-
-def sync_plan(entries):
-    games = installed_bottle_games()
-    want = {g[0]: g for g in games}
-    have = {}
-    for e in entries:
-        if SYNC_TAG in entry_tags(e):
-            m = re.match(r"^steam (\d+)$", e.get("LaunchOptions", ""))
-            if m:
-                have[m.group(1)] = e
-    names_taken = {e["AppName"] for e in entries if SYNC_TAG not in entry_tags(e)}
-    to_add = [g for a, g in want.items() if a not in have and g[1] not in names_taken]
-    to_remove = [e for a, e in have.items() if a not in want]
-    return to_add, to_remove
-
-
-def cmd_sync(check_only):
-    entries = load_shortcuts()
-    to_add, to_remove = sync_plan(entries)
-    if check_only:
-        for g in to_add:
-            print(f"+ {g[1]} ({g[0]})")
-        for e in to_remove:
-            print(f"- {e['AppName']}")
-        return EXIT_NEEDS_SYNC if (to_add or to_remove) else 0
-    if not to_add and not to_remove:
-        print("Up to date.")
-        return 0
-    removed = {id(e) for e in to_remove}
-    entries = [e for e in entries if id(e) not in removed]
-    for appid, name, _ in to_add:
-        e = make_entry(name, "steam", appid, tags=(SYNC_TAG,))
-        entries.append(e)
-        copy_art(appid, unsigned_appid(e))
-        print(f"+ {name} ({appid})")
-    for e in to_remove:
-        print(f"- {e['AppName']}")
-    save_shortcuts(entries)
-    return 0
+def sync(path, dry_run=False):
+    """Make Mac Steam's tiles match the bottle's installed games. Only touches tiles it created.
+    Returns True if anything needed changing."""
+    sc = load(path)
+    games = bottle_games()
+    changed = False if dry_run else migrate(sc)
+    if dry_run and any(v.get("Exe", "").strip('"') == LAUNCHER for v in sc.values()):
+        return True
+    ours = {target_of(v).split()[1]: k for k, v in sc.items()
+            if SYNC_TAG in v.get("tags", {}).values() and target_of(v).startswith("steam ")}
+    for appid, key in ours.items():
+        if appid not in games:
+            changed = True
+            if dry_run: continue
+            print(f"Removed {sc[key]['AppName']} (uninstalled)"); del sc[key]
+    grid = os.path.join(os.path.dirname(path), "grid")
+    if dry_run:
+        return changed or any(a not in ours for a in games)
+    for appid, name in games.items():
+        if appid not in ours:
+            sc[f"new{appid}"] = entry(name, f"steam {appid}", ("Windows (CrossOver)", SYNC_TAG))
+            print(f"Added {name}"); changed = True
+        copy_art(appid, shortcut_appid(name), grid)
+    if changed:
+        save(path, sc)
+    else:
+        print("Up to date")
+    return changed
 
 
 def main(argv):
-    if not argv or argv[0] in ("-h", "--help"):
-        print(__doc__.strip())
-        return 0
-    if argv[0] == "--list":
-        for e in load_shortcuts():
-            tags = ", ".join(entry_tags(e))
-            print(f"{e['AppName']}\t{unsigned_appid(e)}\t{e.get('LaunchOptions', '')}"
-                  + (f"\t[{tags}]" if tags else ""))
-        return 0
-    if argv[0] == "--remove":
-        if len(argv) != 2:
-            die("usage: add-game --remove \"Name\"", 2)
-        entries = load_shortcuts()
-        keep = [e for e in entries if e["AppName"] != argv[1]]
-        if len(keep) == len(entries):
-            die(f"no shortcut named {argv[1]!r}")
-        save_shortcuts(keep)
-        print(f"Removed {argv[1]}")
-        return 0
-    if argv[0] == "--sync":
-        return cmd_sync(False)
-    if argv[0] == "--check":
-        return cmd_sync(True)
-    if len(argv) != 3 or argv[1] not in ("exe", "steam"):
-        die('usage: add-game "Name" exe "/path/game.exe" | add-game "Name" steam <appid>', 2)
-    name, kind, target = argv
-    if kind == "steam" and not target.isdigit():
-        die("steam appid must be a number", 2)
-    if kind == "exe" and not os.path.isfile(target):
-        die(f"no such file: {target}")
-    entries = [e for e in load_shortcuts() if e["AppName"] != name]
-    e = make_entry(name, kind, target)
-    entries.append(e)
-    save_shortcuts(entries)
-    if kind == "steam":
-        copy_art(target, unsigned_appid(e))
-    print(f"Added {name} (shortcut id {unsigned_appid(e)})")
-    return 0
+    steam_open = not os.environ.get("CM_ASSUME_STEAM_CLOSED") and subprocess.run(["pgrep", "-x", "steam_osx"], capture_output=True).returncode == 0
+    if steam_open and argv[:1] not in (["--list"], ["--check"], ["--lookup"]):
+        sys.exit("Quit Mac Steam first (Steam > Quit Steam), then run this again.")
+    files = shortcuts_files()
+    if not files:
+        sys.exit("No Mac Steam user found; sign in to Steam once first.")
+    for path in files:
+        sc = load(path)
+        if argv[:1] == ["--uninstall"]:
+            ours = {k: v for k, v in sc.items()
+                    if v.get("Exe", "").strip('"').startswith((TILES, LAUNCHER))}
+            grid = os.path.join(os.path.dirname(path), "grid")
+            for v in ours.values():
+                aid = v.get("appid", 0) & 0xFFFFFFFF
+                for pattern in (f"{aid}p.*", f"{aid}.*", f"{aid}_hero.*", f"{aid}_logo.*"):
+                    for f in glob.glob(os.path.join(grid, pattern)):
+                        os.remove(f)
+                print(f"Removed {v.get('AppName')}")
+            save(path, {k: v for k, v in sc.items() if k not in ours})
+            shutil.rmtree(TILES, ignore_errors=True)
+            continue
+        if argv[:1] == ["--lookup"] and len(argv) == 2:
+            want = int(argv[1]) & 0xFFFFFFFF
+            for v in sc.values():
+                if v.get("appid", 0) & 0xFFFFFFFF == want:
+                    print(v.get("AppName", "")); return
+            continue
+        if argv[:1] == ["--check"]:
+            if sync(path, dry_run=True):
+                print("Sync needed"); sys.exit(10)
+            print("Up to date")
+        elif argv[:1] == ["--sync"]:
+            sync(path)
+        elif argv[:1] == ["--list"]:
+            for v in sc.values():
+                print(f"{v.get('AppName')}: {target_of(v)}")
+        elif argv[:1] == ["--remove"] and len(argv) == 2:
+            sc = {k: v for k, v in sc.items() if v.get("AppName") != argv[1]}
+            shutil.rmtree(wrapper_path(argv[1]), ignore_errors=True)
+            save(path, sc); print(f"Removed {argv[1]}")
+        elif len(argv) == 3 and argv[1] in ("exe", "steam"):
+            name, kind, target = argv
+            if kind == "exe" and not os.path.exists(target):
+                sys.exit(f"Not found: {target}")
+            opts = f'steam {target}' if kind == "steam" else f'exe "{target}"'
+            sc = {k: v for k, v in sc.items() if v.get("AppName") != name}
+            sc[str(len(sc))] = entry(name, opts)
+            save(path, sc); print(f"Added {name} -> Big Picture")
+        else:
+            sys.exit(__doc__)
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    main(sys.argv[1:])

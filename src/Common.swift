@@ -1,232 +1,125 @@
-import AppKit
-import CoreGraphics
-import Foundation
+import Cocoa
+import ApplicationServices
 
-// MARK: - Paths and constants (see docs/HANDOFF.md section 9 when porting)
+// Shared paths, logging and small helpers for Console Mode.
 
-enum Paths {
-    static let home = FileManager.default.homeDirectoryForCurrentUser.path
-    static let appName = "Console Mode"
-    static let bundleID = "local.consolemode"
-    static let processName = "ConsoleMode"
-
-    static let support = home + "/Library/Application Support/Console Mode"
-    static let frozenFile = support + "/frozen.json"
-    static let logFile = home + "/Library/Logs/ConsoleMode.log"
-    static let screenshots = home + "/Pictures/Console Mode"
-
-    static let gamesDrive = "/Volumes/circular"
-    static let crossOverApp = "/Applications/CrossOverGPTK4.app"
-    static let wineDir = crossOverApp + "/Contents/SharedSupport/CrossOver"
-    static let wine = wineDir + "/bin/wine"
-    static let bottleName = "Steam"
-    static let bottles = home + "/Library/Application Support/CrossOver/Bottles"
-    static let bottle = bottles + "/" + bottleName
-
-    static let macSteamApp = "/Applications/Steam.app"
-    static let macSteamBundleID = "com.valvesoftware.steam"
-    static let macSteamSupport = home + "/Library/Application Support/Steam"
-
-    static let watchdogLabel = "local.consolemode.watchdog"
-    static let watchdogPlist = home + "/Library/LaunchAgents/\(watchdogLabel).plist"
-
-    static var resources: String { Bundle.main.resourcePath ?? (Bundle.main.bundlePath + "/Contents/Resources") }
-    static func resource(_ name: String) -> String { resources + "/" + name }
-}
-
-// MARK: - Logging
-
-private let logQueue = DispatchQueue(label: "log")
-private let logDateFormat: DateFormatter = {
-    let f = DateFormatter()
-    f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-    return f
+/// Drive the games live on (Console Mode waits for it at start). Override with "gamesDrive" in
+/// ~/Library/Application Support/Console Mode/config.json.
+let gamesDrive: String = {
+    let cfg = NSHomeDirectory() + "/Library/Application Support/Console Mode/config.json"
+    if let d = FileManager.default.contents(atPath: cfg),
+       let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any], let v = j["gamesDrive"] as? String { return v }
+    return "/Volumes/circular"
 }()
+let bigPicture = "Steam Helper"
+let steamBundle = "com.valvesoftware.steam"
+let wine = "/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine"
+let supportDir = NSString(string: "~/Library/Application Support/Console Mode").expandingTildeInPath
+let logURL = URL(fileURLWithPath: NSString(string: "~/Library/Logs/ConsoleMode.log").expandingTildeInPath)
 
-func log(_ message: String) {
-    let line = "\(logDateFormat.string(from: Date())) [app] \(message)\n"
-    logQueue.async {
-        let url = URL(fileURLWithPath: Paths.logFile)
-        try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                 withIntermediateDirectories: true)
-        if let h = try? FileHandle(forWritingTo: url) {
-            h.seekToEndOfFile()
-            h.write(line.data(using: .utf8)!)
-            try? h.close()
-        } else {
-            try? line.data(using: .utf8)!.write(to: url)
-        }
-    }
+// Windows processes in the bottle that aren't games.
+let notGames: Set<String> = ["steam.exe", "steamwebhelper.exe", "explorer.exe", "services.exe", "winedevice.exe",
+    "plugplay.exe", "svchost.exe", "rpcss.exe", "conhost.exe", "start.exe", "steamerrorreporter.exe", "crashhandler.exe"]
+
+func log(_ s: String) {
+    let line = "[console-mode \(Date())] \(s)\n"
+    if let h = try? FileHandle(forWritingTo: logURL) { h.seekToEndOfFile(); h.write(line.data(using: .utf8)!); try? h.close() }
 }
 
-// MARK: - Processes
-
-/// Runs a program to completion and returns (exit status, stdout).
 @discardableResult
-func run(_ path: String, _ args: [String] = [], env: [String: String]? = nil) -> (status: Int32, output: String) {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: path)
-    p.arguments = args
-    if let env { p.environment = ProcessInfo.processInfo.environment.merging(env) { $1 } }
-    let out = Pipe()
-    p.standardOutput = out
-    p.standardError = FileHandle.nullDevice
-    do { try p.run() } catch {
-        log("run failed: \(path) \(args): \(error)")
-        return (-1, "")
-    }
-    let data = out.fileHandleForReading.readDataToEndOfFile()
+func run(_ path: String, _ args: [String]) -> Int32 {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return -1 }
+    p.waitUntilExit(); return p.terminationStatus
+}
+
+/// Run a helper and return its exit status and output. Reads the output BEFORE waiting: a helper
+/// that prints more than the pipe buffer (64 KB) would otherwise block forever.
+@discardableResult
+func capture(_ path: String, _ args: [String]) -> (status: Int32, output: String) {
+    let p = Process(); let pipe = Pipe()
+    p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+    p.standardOutput = pipe; p.standardError = FileHandle.nullDevice
+    guard (try? p.run()) != nil else { return (-1, "") }
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     p.waitUntilExit()
-    return (p.terminationStatus, String(decoding: data, as: UTF8.self))
+    return (p.terminationStatus, String(data: data, encoding: .utf8) ?? "")
 }
 
-/// Starts a program without waiting; stdout/stderr go to the log file.
-@discardableResult
-func spawn(_ path: String, _ args: [String] = [], onExit: (@Sendable (Int32) -> Void)? = nil) -> Process? {
-    let p = Process()
-    p.executableURL = URL(fileURLWithPath: path)
-    p.arguments = args
-    if let h = FileHandle(forWritingAtPath: Paths.logFile) {
-        h.seekToEndOfFile()
-        p.standardOutput = h
-        p.standardError = h
-    }
-    if let onExit { p.terminationHandler = { onExit($0.terminationStatus) } }
-    do { try p.run() } catch {
-        log("spawn failed: \(path) \(args): \(error)")
-        return nil
-    }
-    return p
+/// Start a helper without waiting for it.
+func spawn(_ path: String, _ args: [String]) {
+    let p = Process(); p.executableURL = URL(fileURLWithPath: path); p.arguments = args
+    p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+    try? p.run()
 }
 
-// MARK: - Activation
+func resource(_ name: String) -> String? { Bundle.main.path(forResource: name, ofType: nil) }
 
-/// Brings another app forward from this accessory app. macOS 14+ refuses a
-/// plain activate() from a background app, so use cooperative activation:
-/// activate ourselves, yield to the target, then let the target activate.
+func steamRunning() -> Bool { !NSRunningApplication.runningApplications(withBundleIdentifier: steamBundle).isEmpty }
+func bottleSteamRunning() -> Bool { run("/usr/bin/pgrep", ["-f", "Steam\\\\steam.exe"]) == 0 }
+
+func isRunning(_ name: String) -> Bool {
+    NSWorkspace.shared.runningApplications.contains { $0.localizedName == name }
+}
+
 @MainActor
-func bringToFront(_ app: NSRunningApplication) {
-    if NSWorkspace.shared.frontmostApplication?.processIdentifier == app.processIdentifier { return }
+func bringToFront(_ name: String) {
+    let match = name == bigPicture
+        ? NSRunningApplication.runningApplications(withBundleIdentifier: steamBundle).first
+        : NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == name })
+    guard let app = match else { log("bringToFront: \(name) not running"); return }
+    // Cooperative activation (macOS 14+): become active ourselves, then hand activation over.
     NSApp.activate()
+    app.unhide()
     NSApp.yieldActivation(to: app)
-    app.activate(from: NSRunningApplication.current, options: [.activateAllWindows])
-}
-
-func macSteam() -> NSRunningApplication? {
-    NSRunningApplication.runningApplications(withBundleIdentifier: Paths.macSteamBundleID).first
-}
-
-// MARK: - Windows
-
-/// Bottle programs whose windows are never "the game".
-let nonGameExes: Set<String> = [
-    "steam.exe", "steamwebhelper.exe", "steamservice.exe", "gameoverlayui.exe",
-    "explorer.exe", "services.exe", "winedevice.exe", "plugplay.exe", "rpcss.exe",
-    "svchost.exe", "conhost.exe", "start.exe", "winemenubuilder.exe", "crashhandler.exe",
-]
-
-struct WindowInfo {
-    let owner: String
-    let pid: pid_t
-    let layer: Int
-    let bounds: CGRect
-}
-
-func onScreenWindows() -> [WindowInfo] {
-    let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
-                                          kCGNullWindowID) as? [[String: Any]] ?? []
-    return list.compactMap { w in
-        guard let owner = w[kCGWindowOwnerName as String] as? String,
-              let pid = w[kCGWindowOwnerPID as String] as? pid_t,
-              let b = w[kCGWindowBounds as String] as? [String: Double],
-              (w[kCGWindowAlpha as String] as? Double ?? 1) > 0
-        else { return nil }
-        return WindowInfo(owner: owner, pid: pid,
-                          layer: w[kCGWindowLayer as String] as? Int ?? 0,
-                          bounds: CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0,
-                                         width: b["Width"] ?? 0, height: b["Height"] ?? 0))
+    var ok = app.activate(from: .current, options: [])
+    // Background apps can be refused; with Accessibility, raising through AX always works and also
+    // switches to the Space the app's window is on (Wine puts full-screen games in their own Space).
+    if AXIsProcessTrusted() {
+        let el = AXUIElementCreateApplication(app.processIdentifier)
+        ok = AXUIElementSetAttributeValue(el, kAXFrontmostAttribute as CFString, kCFBooleanTrue) == .success || ok
     }
+    log("bringToFront \(name): \(ok ? "ok" : "refused")")
 }
 
-/// The owner (e.g. "Cyberpunk2077.exe") and pid of a large bottle game window.
-/// Full-screen Wine windows sit at layer 26, windowed ones at 0.
-func gameWindowOwner() -> (name: String, pid: pid_t)? {
-    for w in onScreenWindows() {
-        let lower = w.owner.lowercased()
-        guard lower.hasSuffix(".exe"), !nonGameExes.contains(lower),
-              w.bounds.width >= 640, w.bounds.height >= 400 else { continue }
-        return (w.owner, w.pid)
+// Owner of a large window from the bottle that isn't Steam itself. Includes windows that aren't on
+// the current Space: Wine puts full-screen games in their own Space, and activating the game (what
+// bringToFront does) switches to it.
+func gameWindowOwner() -> String? { gameWindow()?.owner }
+
+/// Does this app have windows on another Space? Activating such an app makes macOS slide over to that
+/// Space (the "switch to a Space with open windows" setting). Wine games always keep a few there.
+func hasWindowsOnOtherSpaces(_ owner: String) -> Bool {
+    guard let info = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return false }
+    return info.contains { ($0[kCGWindowOwnerName as String] as? String) == owner && !($0[kCGWindowIsOnscreen as String] as? Bool ?? false)
+        && ((($0[kCGWindowBounds as String] as? [String: CGFloat])?["Width"] ?? 0) >= 640) }
+}
+
+/// The game's main window and whether it's on the current Space yet. Bringing a game forward before
+/// its window is on the current Space makes macOS slide to another Space (a visible animation).
+func gameWindow() -> (owner: String, onCurrentSpace: Bool)? {
+    guard let info = CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else { return nil }
+    var found: (String, Bool)?
+    for w in info {
+        guard let owner = w[kCGWindowOwnerName as String] as? String, owner.lowercased().hasSuffix(".exe"),
+              !notGames.contains(owner.lowercased()),
+              let b = w[kCGWindowBounds as String] as? [String: CGFloat], (b["Width"] ?? 0) >= 640, (b["Height"] ?? 0) >= 480
+        else { continue }
+        let on = w[kCGWindowIsOnscreen as String] as? Bool ?? false
+        if on { return (owner, true) }
+        found = found ?? (owner, false)
     }
-    return nil
+    return found
 }
 
-/// True once Mac Steam shows a window covering most of the main display
-/// (Big Picture is a single full-screen window).
+// Full-screen Big Picture window on the main display (not a login/update popup).
 func bigPictureReady() -> Bool {
-    guard let steam = macSteam(), let main = NSScreen.screens.first else { return false }
-    let area = main.frame.width * main.frame.height
-    let steamPids = Set(steamProcessIDs()).union([steam.processIdentifier])
-    return onScreenWindows().contains { w in
-        steamPids.contains(w.pid) && w.bounds.width * w.bounds.height >= area * 0.8
+    guard let screen = NSScreen.screens.first,
+          let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return false }
+    return info.contains { w in
+        guard (w[kCGWindowOwnerName as String] as? String) == bigPicture,
+              let b = w[kCGWindowBounds as String] as? [String: CGFloat] else { return false }
+        return (b["Width"] ?? 0) >= screen.frame.width && (b["Height"] ?? 0) >= screen.frame.height
     }
-}
-
-/// All Mac Steam processes (steam_osx and its helpers).
-func steamProcessIDs() -> [pid_t] {
-    ProcessList.all().filter { $0.path.hasPrefix(Paths.macSteamSupport + "/") || $0.path.hasPrefix(Paths.macSteamApp + "/") }
-        .map(\.pid)
-}
-
-// MARK: - Process list (shared by Freezer and shutdown)
-
-struct ProcInfo {
-    let pid: pid_t
-    let ppid: pid_t
-    let name: String
-    let path: String
-    let stopped: Bool
-}
-
-enum ProcessList {
-    /// Every process of the current user, via sysctl(KERN_PROC_UID).
-    static func all() -> [ProcInfo] {
-        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_UID, Int32(getuid())]
-        var size = 0
-        guard sysctl(&mib, 4, nil, &size, nil, 0) == 0, size > 0 else { return [] }
-        let stride = MemoryLayout<kinfo_proc>.stride
-        var procs = [kinfo_proc](repeating: kinfo_proc(), count: size / stride + 16)
-        size = procs.count * stride
-        guard sysctl(&mib, 4, &procs, &size, nil, 0) == 0 else { return [] }
-        let count = size / stride
-        var result: [ProcInfo] = []
-        result.reserveCapacity(count)
-        for i in 0..<count {
-            var kp = procs[i]
-            let pid = kp.kp_proc.p_pid
-            let name = withUnsafePointer(to: &kp.kp_proc.p_comm) {
-                $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN) + 1) { String(cString: $0) }
-            }
-            result.append(ProcInfo(pid: pid, ppid: kp.kp_eproc.e_ppid, name: name,
-                                   path: path(of: pid), stopped: Int32(kp.kp_proc.p_stat) == SSTOP))
-        }
-        return result
-    }
-
-    static func path(of pid: pid_t) -> String {
-        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        let n = proc_pidpath(pid, &buf, UInt32(buf.count))
-        return n > 0 ? String(cString: buf) : ""
-    }
-}
-
-// MARK: - Main-thread scheduling
-
-/// Runs `work` on the main actor after `seconds`.
-func onMain(after seconds: Double, _ work: @escaping @MainActor () -> Void) {
-    DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { MainActor.assumeIsolated(work) }
-}
-
-/// Runs `work` on the main actor as soon as possible (from any thread).
-func onMain(_ work: @escaping @MainActor () -> Void) {
-    DispatchQueue.main.async { MainActor.assumeIsolated(work) }
 }

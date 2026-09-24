@@ -1,65 +1,97 @@
 #!/bin/zsh
-# Target of every Mac Steam tile. Runs a game inside the CrossOver bottle and
-# only returns once its window has closed, so Mac Steam shows "playing" for the
-# whole session.
+# Launch a Windows game from the CrossOver "Steam" bottle, for use as a Mac Steam
+# "non-Steam game" target. Stays running until the game exits so Big Picture
+# knows when you're back.
+#   bottle-launch steam <appid>          game installed through the bottle's Steam
+#   bottle-launch exe "/path/to/game.exe"
 #
-#   bottle-launch steam <appid>          game from the bottle's Steam
-#   bottle-launch exe "/path/game.exe"   any Windows exe
-emulate -L zsh
-setopt no_unset pipe_fail
+# Talks to Console Mode through ~/Library/Application Support/Console Mode/session.json:
+#   launching -> playing -> ended, and "resume-request" when this tile's game is suspended
+#   (Quick Resume) so pressing Play resumes it instead of starting a second copy.
+CX="/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine"
+STEAM='C:\Program Files (x86)\Steam\steam.exe'
+LOG="$HOME/Library/Logs/ConsoleMode.log"
+SESSION="$HOME/Library/Application Support/Console Mode/session.json"
+HERE="${0:A:h}"
+log() { echo "[bottle-launch $(date)] $*" >> "$LOG"; }
+[[ "$1" == steam || "$1" == exe ]] || { echo "usage: bottle-launch steam <appid> | exe <path.exe>"; exit 2; }
+TARGET="$1 $2"
 
-here=${0:A:h}
-WINE=${CM_WINE:-/Applications/CrossOverGPTK4.app/Contents/SharedSupport/CrossOver/bin/wine}
-BOTTLE=${CM_BOTTLE_NAME:-Steam}
-BOTTLE_DIR=${CM_BOTTLE:-$HOME/Library/Application Support/CrossOver/Bottles/$BOTTLE}
-WINDOWS=${CM_BOTTLE_WINDOWS:-$here/bottle-windows}
-LOG=${CM_LOG:-$HOME/Library/Logs/ConsoleMode.log}
-START_TIMEOUT=${CM_START_TIMEOUT:-180}   # seconds to wait for a game window
-GONE_SECS=${CM_GONE_SECS:-6}             # window must be gone this long
-POLL=${CM_POLL:-1}
+# The tile's wrapper app tells us its name and Mac Steam shortcut id. Fallback: Mac Steam's
+# SteamGameId (an unsigned 64-bit value, too big for shell arithmetic, so Python does the math).
+SHORTCUT="${CM_TILE_SHORTCUT:-}"
+[[ -z "$SHORTCUT" ]] && SHORTCUT=$(/usr/bin/python3 -c "import sys; print((int(sys.argv[1] or 0) >> 32) & 0xFFFFFFFF)" "${SteamGameId:-0}" 2>/dev/null || echo 0)
+NAME="${CM_TILE_NAME:-}"
+[[ -z "$NAME" ]] && NAME=$("$HERE/add-game" --lookup "$SHORTCUT" 2>/dev/null)
+[[ -z "$NAME" ]] && NAME="${${2:t}%.exe}"
+NOTICE="$HOME/Library/Application Support/Console Mode/notice.txt"
 
-log() { print -r -- "$(date '+%Y-%m-%d %H:%M:%S') [bottle-launch] $*" >> $LOG 2>/dev/null }
-die() { log "error: $*"; print -r -- "bottle-launch: $*" >&2; exit 1 }
+write_session() {   # state
+  mkdir -p "${SESSION:h}"
+  /usr/bin/python3 - "$SESSION" "$1" "$NAME" "$SHORTCUT" "$TARGET" "$START" <<'PY'
+import json, os, sys
+path, state, name, shortcut, target, start = sys.argv[1:]
+tmp = path + ".tmp"
+json.dump({"state": state, "name": name, "shortcut": int(shortcut), "target": target, "time": float(start)}, open(tmp, "w"))
+os.replace(tmp, path)
+PY
+}
+session_field() { /usr/bin/python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$SESSION" "$1" 2>/dev/null; }
 
-(( $# == 2 )) || die "usage: bottle-launch steam <appid> | exe <path>"
-kind=$1 target=$2
-[[ -x $WINE ]] || die "wine not found at $WINE"
+wins() { "$HERE/bottle-windows" 2>/dev/null; }
+# Is this exe running inside Wine? (Wine shows the Windows path as the command line.)
+exe_running() { ps -Ao command | grep -iF "\\${2:t}" | grep -qv grep; }
 
-case $kind in
-  steam)
-    [[ $target == <-> ]] || die "appid must be a number: $target"
-    steam_exe='C:\Program Files (x86)\Steam\steam.exe'
-    [[ -f "$BOTTLE_DIR/drive_c/Program Files (x86)/Steam/steam.exe" ]] || \
-      steam_exe='C:\Program Files\Steam\steam.exe'
-    log "launch steam app $target"
-    $WINE --bottle $BOTTLE $steam_exe -silent -applaunch $target >>$LOG 2>&1 &!
-    ;;
-  exe)
-    [[ -f $target ]] || die "no such file: $target"
-    log "launch exe $target"
-    $WINE --bottle $BOTTLE --workdir ${target:h} $target >>$LOG 2>&1 &!
-    ;;
-  *) die "unknown kind: $kind" ;;
-esac
-
-# 1. Wait for the game's window.
-waited=0 owner=''
-while (( waited < START_TIMEOUT )); do
-  owner=$($WINDOWS 2>/dev/null)
-  [[ -n $owner ]] && break
-  sleep $POLL; (( waited += POLL ))
-done
-if [[ -z $owner ]]; then
-  log "no game window after ${START_TIMEOUT}s — giving up"
-  exit 2
+# One game at a time, one copy of each: never collide.
+STATE="$(session_field state)"; PREV_TARGET="$(session_field target)"; PREV_TIME="$(session_field time)"; PREV_TIME="${PREV_TIME:-0}"
+recent=$(( $(date +%s) - ${PREV_TIME%.*} < 180 ))
+if [[ "$STATE" == playing || ( "$STATE" == launching && $recent == 1 ) ]] && [[ -n "$(wins)" || $recent == 1 ]]; then
+  if [[ "$PREV_TARGET" == "$TARGET" ]]; then
+    log "$NAME is already ${STATE}: not starting a second copy"
+    START="$PREV_TIME"; write_session focus-request
+    exit 0
+  elif [[ -n "$(wins)" || $recent == 1 ]]; then       # another game is running or still starting
+    log "blocked $NAME: $(session_field name) is still running"
+    mkdir -p "${NOTICE:h}"; echo "Close $(session_field name) first" > "$NOTICE"
+    exit 1
+  fi
 fi
-log "game window up: $owner"
+if [[ "$1" == exe ]] && exe_running "$1" "$2"; then
+  log "$NAME is already running (found its process): not starting a second copy"
+  START=$(date +%s); write_session focus-request
+  exit 0
+fi
 
-# 2. Wait until no game window has been seen for GONE_SECS in a row.
+# Quick Resume: this game is suspended -> ask Console Mode to resume it.
+if [[ "$(session_field state)" == suspended && "$(session_field target)" == "$TARGET" ]]; then
+  START=$(session_field time)
+  write_session resume-request
+  log "resume requested for $NAME"
+else
+  START=$(date +%s)
+  write_session launching
+  case "$1" in
+    steam) "$CX" --bottle Steam --no-wait "$STEAM" -silent -applaunch "$2" >/dev/null 2>&1 ;;
+    exe)   "$CX" --bottle Steam --no-wait --workdir "${2:h}" "$2" >/dev/null 2>&1 ;;
+  esac
+  log "launched $NAME ($TARGET)"
+fi
+
+# Wait for a game window from the bottle to appear (up to 3 min), then for it to go away.
+for i in {1..180}; do [[ -n "$(wins)" ]] && break; sleep 1; done
+if [[ -z "$(wins)" ]]; then log "no game window appeared"; write_session ended; exit 1; fi
+[[ "$(session_field state)" == launching || "$(session_field state)" == resume-request ]] && write_session playing
+log "game window: $(wins)"
 gone=0
-while (( gone < GONE_SECS )); do
-  sleep $POLL
-  if [[ -n $($WINDOWS 2>/dev/null) ]]; then gone=0; else (( gone += POLL )); fi
+while (( gone < 3 )); do
+  if [[ -z "$(wins)" ]]; then
+    # Suspended by Quick Resume: the window is hidden, not gone. Let Steam show "Play" again.
+    [[ "$(session_field state)" == suspended ]] && { log "$NAME suspended"; exit 0; }
+    ((gone++))
+  else
+    gone=0
+  fi
+  sleep 2
 done
-log "game closed: $owner"
-exit 0
+write_session ended
+log "game closed"

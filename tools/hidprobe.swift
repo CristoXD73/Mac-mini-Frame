@@ -1,21 +1,18 @@
-// Logs raw HID button/hat changes from Microsoft (and Sony/Valve) controllers
-// for 60 s. Used to find the home button's usage (page 0x09, usage 0x0D on
-// the Xbox Wireless Controller 0x0B13).
-//   swiftc tools/hidprobe.swift -o /tmp/hidprobe && /tmp/hidprobe
 import Foundation
 import IOKit.hid
-
-let m = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-IOHIDManagerSetDeviceMatchingMultiple(m, [0x045E, 0x054C, 0x28DE].map { [kIOHIDVendorIDKey: $0] } as CFArray)
-let start = Date()
-IOHIDManagerRegisterInputValueCallback(m, { _, _, _, value in
+// Log every button-like HID change from Microsoft controllers (vendor 0x045E) for 60 seconds.
+let mgr = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
+IOHIDManagerSetDeviceMatching(mgr, [kIOHIDVendorIDKey: 0x045E] as CFDictionary)
+IOHIDManagerRegisterInputValueCallback(mgr, { _, _, _, value in
     let e = IOHIDValueGetElement(value)
-    let page = IOHIDElementGetUsagePage(e), usage = IOHIDElementGetUsage(e)
-    guard page == 0x09 || (page == 0x01 && usage == 0x39) else { return }
-    print(String(format: "%7.3f  page 0x%02X usage 0x%02X (%d)  value %d  [logical %d...%d]",
-                 Date().timeIntervalSince(start), page, usage, usage, IOHIDValueGetIntegerValue(value),
-                 IOHIDElementGetLogicalMin(e), IOHIDElementGetLogicalMax(e)))
+    let page = IOHIDElementGetUsagePage(e), usage = IOHIDElementGetUsage(e), v = IOHIDValueGetIntegerValue(value)
+    // Skip sticks/triggers (generic desktop axes) to keep the log readable.
+    if page == 0x01 && (0x30...0x35).contains(usage) { return }
+    if page == 0x02 { return }
+    print(String(format: "%.2f page=0x%02X usage=0x%03X value=%d", Date().timeIntervalSince1970.truncatingRemainder(dividingBy: 1000), page, usage, v))
+    fflush(stdout)
 }, nil)
-IOHIDManagerScheduleWithRunLoop(m, CFRunLoopGetMain(), CFRunLoopMode.defaultMode.rawValue)
-print("open: 0x" + String(IOHIDManagerOpen(m, IOOptionBits(kIOHIDOptionsTypeNone)), radix: 16), "— press buttons (60 s)")
-RunLoop.main.run(until: Date().addingTimeInterval(60))
+IOHIDManagerScheduleWithRunLoop(mgr, CFRunLoopGetCurrent(), CFRunLoopMode.defaultMode.rawValue)
+let r = IOHIDManagerOpen(mgr, IOOptionBits(kIOHIDOptionsTypeNone))
+print("open result: \(r == kIOReturnSuccess ? "ok" : String(format: "0x%08X", r))"); fflush(stdout)
+RunLoop.current.run(until: Date().addingTimeInterval(60))

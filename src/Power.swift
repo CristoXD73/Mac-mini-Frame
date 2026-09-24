@@ -1,36 +1,34 @@
-import Foundation
+import Cocoa
 import IOKit.pwr_mgt
 
-/// Keeps the displays awake during game mode (a controller doesn't count as
-/// user activity) and runs the optional Focus shortcuts.
-enum Power {
-    private static var assertion: IOPMAssertionID = 0
+// While in game mode: keep the Mac and its displays awake, and switch notifications off.
+//
+// macOS has no public API to turn a Focus on, so this runs two Shortcuts if they exist:
+// "Console Mode On" (Set Focus: Do Not Disturb / Gaming → On) and "Console Mode Off".
 
-    static func gameModeOn() {
+@MainActor
+final class Power {
+    private var assertion: IOPMAssertionID = 0
+
+    func enterGameMode() {
         if assertion == 0 {
-            let r = IOPMAssertionCreateWithName(kIOPMAssertPreventUserIdleDisplaySleep as CFString,
-                                                IOPMAssertionLevel(kIOPMAssertionLevelOn),
-                                                "Console Mode game mode" as CFString, &assertion)
-            if r != kIOReturnSuccess { assertion = 0; log("power: assertion failed") }
+            IOPMAssertionCreateWithName(kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+                                        IOPMAssertionLevel(kIOPMAssertionLevelOn), "Console Mode: gaming" as CFString, &assertion)
         }
         runShortcut("Console Mode On")
     }
 
-    static func gameModeOff() {
-        if assertion != 0 {
-            IOPMAssertionRelease(assertion)
-            assertion = 0
-        }
+    func leaveGameMode() {
+        if assertion != 0 { IOPMAssertionRelease(assertion); assertion = 0 }
         runShortcut("Console Mode Off")
     }
 
-    /// Runs a Shortcut only if the user created one with that exact name.
-    private static func runShortcut(_ name: String) {
-        DispatchQueue.global(qos: .utility).async {
-            let list = run("/usr/bin/shortcuts", ["list"]).output
-            guard list.split(separator: "\n").contains(where: { $0 == name }) else { return }
-            let r = run("/usr/bin/shortcuts", ["run", name])
-            log("power: shortcut \(name) -> \(r.status)")
+    private func runShortcut(_ name: String) {
+        DispatchQueue.global().async {
+            let names = capture("/usr/bin/shortcuts", ["list"]).output.split(separator: "\n").map(String.init)
+            guard names.contains(name) else { return }
+            run("/usr/bin/shortcuts", ["run", name])
+            log("ran shortcut: \(name)")
         }
     }
 }

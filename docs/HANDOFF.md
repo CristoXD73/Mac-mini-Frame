@@ -10,15 +10,30 @@ A macOS app that makes a Mac mini behave like a game console, driven entirely by
 
 | Controller action | What happens |
 |---|---|
-| **Press the Xbox button** | **Game mode.** Other apps are hidden and *paused* (SIGSTOP). Every display except the main one shows an animated starfield "takeover". **Native Mac Steam Big Picture** opens on the main display. Windows games from a **CrossOver bottle** show up in Big Picture as tiles and launch through the bottle. |
+| **Press the Xbox button** | **Game mode.** Other apps are hidden and *paused* (SIGSTOP). Every display except the main one shows an animated starfield "takeover", or a **Now Playing** card while a game runs. **Native Mac Steam Big Picture** opens on the main display. It's near-instant because Steam is preloaded and Big Picture is only un-minimized. Windows games from a **CrossOver bottle** show up in Big Picture as tiles and launch through the bottle, with a **launch screen** (game art plus a loading bar) until the game's window appears. |
 | Press it again later | Brings Big Picture, or the running game, back to the front. |
-| **Hold the Xbox button 6 s** | **Back to PC.** The game, Mac Steam and the bottle's Windows Steam close. Paused apps resume, hidden apps reappear and the takeover disappears. A countdown shows from the 2-second mark. |
+| **Hold the Xbox button 6 s** | **Back to PC.** The game and the bottle's Windows Steam close; Mac Steam stays loaded with Big Picture minimized. Paused apps resume, hidden apps reappear and the takeover disappears. A countdown shows from the 2-second mark. Console Mode stays resident in standby. |
 | Xbox + **D-pad up/down** | Volume ±6% (shows a notice) |
-| Xbox + **Y** | Toggles a CPU / GPU / RAM / clock overlay in the top-right corner |
-| Xbox + **View** | Screenshot of the main display to `~/Pictures/Console Mode/` (flash and shutter sound) |
+| Xbox + **Y** | Toggles a CPU / GPU / RAM / games-drive / clock overlay in the top-right corner |
+| Xbox + **View** (on release) | Screenshot of the main display to `~/Pictures/Console Mode/` (flash and shutter sound) |
+| Xbox + **X** | **Quick Resume:** suspend the game (frozen with SIGSTOP, 0% CPU, hidden, back to Big Picture); press again, or Play on its tile, to resume |
+| Xbox + **Menu + View** | **Force quit** the game (press twice within 4 s to confirm) |
+| Xbox + **LB** | **Save Rewind:** timeline of save snapshots; LB/RB or ◀▶ move through time, ▲▼ switch game, A restore (confirms), B close |
 | Any other button while holding Xbox | Cancels the 6-second exit countdown for that hold |
 
-After a game closes, the save folders it changed are **backed up** (read-only on the game side and verified) to `/Volumes/Storage/Console Mode/Save Backups/`.
+**Save backups:**
+- Snapshots are taken every ~30 s while playing (only when the saves changed, up to 40 kept per game) and when a game closes.
+- The game's own folders are only read; copies are verified.
+- They go to `/Volumes/Storage/Console Mode/Save Backups/`, and feed Save Rewind.
+- A restore always snapshots the current save first ("before-restore"), so it can be undone.
+
+**Status:**
+- Entering game mode shows **one** heads-up with the controller battery and any drive under 50 GB free.
+- After that, only a discrete chip in the corner of the extra displays (nothing further if there are none).
+
+**Audio (trial):** switches the output to a configured device in game mode, and back on exit.
+
+**Remote Play:** Mac Steam hosts streams to the Steam Link app (already enabled: `EnableStreaming = 1`).
 
 ![takeover frames](docs/images/takeover-frames.jpg)
 
@@ -50,9 +65,9 @@ These paths are baked into the code. On a different Mac, change the constants li
 "MTL_HUD_ENABLED" = "0"      # was 1; turned off for a clean console look
 ```
 
-A backup of the bottle settings from before the GPTK4 tuning is at `…/Bottles/Steam-GPTK4-settings-backup-20260924-025812`. The record of the applied values is in `/Volumes/Storage/UserData/Documents/Codex/2026-09-24/cl/outputs/CrossOver-GPTK4-Setup/applied-settings.json`.
+A backup of the bottle settings from before the GPTK4 tuning is kept next to the bottle (`…/Bottles/Steam-GPTK4-settings-backup-<date>`).
 
-Reference performance in this bottle: Cyberpunk 2077's built-in benchmark at 1080p, Medium textures and FSR2 ran at **~60–73 FPS on average** (see `…/outputs/Cyberpunk-session-report.md`).
+Reference performance in this bottle: a demanding DX12 title's built-in benchmark at 1080p (Medium textures, FSR2) averaged **~60–73 FPS**.
 
 ### Bottle drive letters (`…/Bottles/Steam/dosdevices/`)
 
@@ -91,6 +106,25 @@ Resources/ (inside the .app)
  └─ watchdog        LaunchAgent script: resumes paused apps if Console Mode isn't running
 ```
 
+### Standby, sessions, config
+
+- **Standby:** Console Mode stays running in the background after "back to PC" (0% CPU, ~35 MB). The LaunchAgent `local.consolemode.standby` starts it at login with `--standby`, which preloads Mac Steam with `-silent`. The Xbox button then reaches the running app through `applicationShouldHandleReopen`, so there's no app-launch delay.
+- **Instant Big Picture** needs the **Accessibility** permission for Console Mode. Back to PC minimizes and hides the Big Picture window through AX (`kAXMinimizedAttribute`, `kAXHiddenAttribute`); the Xbox button restores it (~0.1 s). Without the permission it quits Steam and cold-starts (~3–5 s).
+- **Bottle warm-up** in game mode: `wineserver -p` (persistent) plus the bottle's Steam `-silent` if any tile is a bottle Steam game. `wineserver -k` runs on exit if no game is running.
+- **Session file:** `~/Library/Application Support/Console Mode/session.json`.
+  - bottle-launch writes `launching` → `playing` → `ended`.
+  - Console Mode writes `suspended`.
+  - bottle-launch writes `resume-request` when a suspended game's tile is launched again.
+  - It also holds the game name, the Mac Steam shortcut id and the launch time.
+  - The shortcut id comes from Steam's `SteamGameId` env var: an unsigned 64-bit value where `id = SteamGameId >> 32`. Don't use shell arithmetic for this; it overflows.
+- **Config** (optional): `~/Library/Application Support/Console Mode/config.json`:
+  ```json
+  { "gamingAudioOutput": "LG TV", "nowPlaying": true, "lowStorageGB": 50, "rewindSnapshots": true, "keepSteamLoaded": true }
+  ```
+- **Volume** goes through Core Audio (`Volume.swift`): the same 16 steps as the keyboard keys, instant (no AppleScript), and hold-to-repeat after 0.35 s, then every 75 ms, from the HID D-pad only.
+- **HUD** (`HUD.swift`): frosted-glass volume pill (top-right), exit ring (center; appears at 2 s, fills to 6 s, then turns into a checkmark), and message pill (top-center). Its window exists only while something is showing.
+- **Test channel:** when `~/Library/Application Support/Console Mode/test-mode` exists, Console Mode accepts `DistributedNotificationCenter` posts named `local.consolemode.test` with `press`, `hold:<s>`, `combo:<name>`, `nav:<dir>` or `dump:<file>` (a JSON state snapshot). These drive the same code paths as the controller. The 10-cycle driver used during development is `tools/cycles.py`. **Delete `test-mode` for normal use.**
+
 ### Source files (`src/`)
 
 | File | Contents |
@@ -101,7 +135,14 @@ Resources/ (inside the .app)
 | `Input.swift` | IOHID manager (vendors 0x045E Microsoft, 0x054C Sony, 0x28DE Valve), home-button hold timer, hat-switch D-pad, GameController combos, de-duplication |
 | `Overlays.swift` | `Toast` and `StatsOverlay` (CPU via `host_processor_info`, GPU via IORegistry `IOAccelerator` → `PerformanceStatistics` → `Device Utilization %`, RAM via `host_statistics64`) |
 | `Power.swift` | Display-sleep assertion; runs Shortcuts named "Console Mode On" / "Console Mode Off" if they exist |
-| `main.swift` | `Controller`: `summon()` / `enterGameMode()` / `startSteam()` / `watch()` / `combo()` / `exitToPC()` / `restoreDesktop()` |
+| `Session.swift` | Session file, `Config`, game artwork lookup (Mac Steam grid → bottle cache), `ScreenModel` (Now Playing, battery, storage), `freeGB()`, `gamePIDs()` |
+| `Standby.swift` | Accessibility-based park/wake of Big Picture, Steam preload, bottle warm-up/cool-down |
+| `LaunchScreen.swift` | Main-display launch screen (hero art, logo, loading bar) |
+| `Rewind.swift` | Save Rewind model and UI (timeline, confirm dialog, restore through `backup-saves --restore`) |
+| `Audio.swift` | CoreAudio default-output switching (trial) |
+| `Volume.swift` | Core Audio volume in 16 steps, mute |
+| `HUD.swift` | Glass volume pill, exit ring, message pill |
+| `main.swift` | `Controller`: `summon()` / `showBigPicture()` / `enterGameMode()` / `startSteam()` / `watch()` / Quick Resume / force quit / `combo()` / `exitToPC()` / `restoreDesktop()` / login item |
 
 ---
 
@@ -130,7 +171,27 @@ Resources/ (inside the .app)
    - A crash is covered by `local.consolemode.watchdog` (every 15 s) and by the next launch.
    - SIGCONT is harmless on a running process, so resuming is always safe to repeat.
    - Hide apps **before** pausing them: a paused app can't hide itself.
-10. **A qemu VM owned by another Claude Code session** (`qemu-system-aarch64`, OccultVM) is normally found paused (`T`). That isn't caused by Console Mode: it's a Claude descendant, so it's protected and never touched. Leave its state alone.
+10. **Processes started by other Claude Code sessions are protected**, including anything they spawned (e.g. a VM). If one is found paused (`T`), Console Mode didn't do it: leave its state alone.
+12. **`NSRunningApplication.hide()` does nothing for Steam's Big Picture window.** The window belongs to `Steam Helper` (`com.valvesoftware.steam.helper`), which refuses hide requests. `steam://close/bigpicture` pops up Steam's desktop window instead. Only Accessibility (minimize and hide through AX) works reliably. A warm `steam://open/bigpicture` takes 0.4–0.7 s; a cold start takes 3–5 s.
+13. **Never read a subprocess's output after `waitUntilExit()`.** If it prints more than 64 KB (`ps -Ao command` does), both sides deadlock. Use `capture()` in `Common.swift`, which reads first.
+18. **Big Picture's full-screen window can't be minimized or moved.** AX minimize returns success but does nothing, and AX position fails. `Standby.park()` tries minimize → move → close and checks each result (`bigPictureReady()`); in practice it lands on **close** (`steam://close/bigpicture`, then minimizing the desktop window Steam opens). Re-entry is then a warm `steam://open/bigpicture` (~1.0 s, measured over 13 cycles). A cold start is 3–5 s.
+19. **Input Monitoring is required for the raw controller reading.** `IOHIDManagerOpen` returns `0xe00002e2` (not permitted) when it's denied, although it sometimes succeeds anyway, which makes it look flaky. Console Mode logs `IOHIDCheckAccess` and calls `IOHIDRequestAccess` at start. Grant it under System Settings › Privacy & Security › **Input Monitoring**.
+20. **The countdown-cancel flag must only change during a hold.** It used to be set by combos without an active hold and was only cleared when a hold ended, which blocked the next exit hold (the exit never completed and apps stayed paused). `cancelHold()` now requires the button to be held, and release always clears it.
+29. **Root cause of the broken exit hold and the "HID watch: failed / Input Monitoring denied" errors.** The Xbox controller exposes several HID interfaces: the gamepad (all buttons, including Xbox = 13, and the D-pad hat) and a keyboard-like one that disconnects and reconnects on every Xbox press. (1) Matching by vendor opened the keyboard-like one too, which needs Input Monitoring, so `IOHIDManagerOpen` failed whenever it was present (0xe00002e2). (2) Treating its removal as "controller gone" wiped every hold after 1 s. **Fix:** match only DeviceUsagePage 1 with usage 5/4 (gamepad/joystick): 5/5 restarts connect immediately, with no Input Monitoring needed. A release is only inferred from removal of the specific interface that reported the Xbox press. Raw Xbox up/down and interface removals are logged (`hid: …`) for diagnosing real holds.
+30. **Wine games and macOS Spaces.** A Wine game creates hidden helper windows on another Space, and its full-screen window (layer 26) shows up on the current Space a few seconds later. *Activating* the game makes macOS slide to the Space with its other windows (System Settings › Desktop & Dock › "When switching to an application, switch to a Space with open windows"). Turning that setting off removes the slide; that's the owner's choice. Console Mode's hand-off (`watch()`): it finds game windows on any Space (`.optionAll`), waits up to 4 s for the window to reach the current Space, and, if the game has windows elsewhere, shows **"Scooting over to your game…"** on the launch screen 0.8 s before activating. The launch screen stays up through the slide, and only Console Mode's hand-off closes it: not bottle-launch's "playing" state, which is written as soon as the window *exists*. Measured with `tools/spacewatch.swift`, which samples which windows are on the current Space every 100 ms.
+31. **`build.sh` refuses to install during game mode** (while `frozen.json` exists; `--force` overrides), quits Console Mode cleanly (force-kill only after 10 s), and restarts it with `--standby`. Installing mid-session unpauses and re-pauses every app. A force-kill skips Console Mode's own cleanup, so the watchdog resumes the apps but hidden apps stay hidden.
+27. **The bottle's Windows Steam takes the Xbox controller away from Console Mode.** With it running, a real Xbox hold showed "home button held" restarting every 1.5–2 s and the controller "gone for over a second", so the exit never completed. That's why the bottle-Steam warm-up was removed; it also showed up as a second Steam. Scripted tests can't catch this, because they inject input above the HID layer. Only a real controller hold verifies the exit. **Open risk:** while a bottle-Steam game (e.g. Portal 2) runs, the bottle's Steam has to run too. If the hold fails in that situation, turn off Xbox controller support in the bottle Steam's controller settings.
+28. **Steam quitting from its own menu ends game mode immediately** (`didTerminateApplicationNotification`). It used to be a 1-second poll gated on 90 s.
+23. **Mac Steam can only launch `.app` bundles as non-Steam games.** Pointing a tile at a plain script makes macOS show a "choose an application" dialog on every launch, and whatever gets picked runs the game outside Console Mode. `add-game` therefore creates one small wrapper app per tile in `~/Library/Application Support/Console Mode/Tiles/<Name>.app`. It exports `CM_TILE_NAME` / `CM_TILE_SHORTCUT` and runs `bottle-launch` with the target baked in. Old script-style tiles are migrated automatically on the next sync (which only runs while Mac Steam is closed).
+24. **Never start a second copy, never run two games at once.** `bottle-launch` checks the session: the same tile while it's starting or playing → `focus-request` (Console Mode brings it forward); a different game while one is starting or running → a "Close X first" notice (`notice.txt` → HUD). The "Steam quit, leave game mode" rule is skipped while a game is running.
+25. **The Xbox controller re-announces a HID interface on every Xbox press.** Resetting button state on "device matched" wiped the press itself, so it resets only on real removal or disconnect.
+26. **Never leave a persistent Wine server running** (`wineserver -p` from the GPTK4 build). The CrossOver app then can't start Steam in the same bottle ("missing" errors). The warm-up only starts the bottle's Steam with `-silent`.
+22. **Lost release events leave the Xbox button "stuck" as held.** This happens when the controller disconnects or reconnects mid-press, and it blocked the exit hold (seen in the 10-cycle run). HID device removal/matching and `GCControllerDidDisconnect` now reset button state, and the "ignore the entry press" rule expires after 8 s.
+21. **Focus returns to the app you were using** before game mode (cooperative activation). The desktop is restored as soon as Big Picture is tucked away; the game and the bottle's Steam finish closing in the background, and game windows are ignored for 5 s so a closing game isn't mistaken for a new one.
+15. **Don't rely on macOS re-opening a resident app.** Once Console Mode stays running (standby), the Home-button "open app" action does not reliably reach it (`applicationShouldHandleReopen` stops firing after returning to PC). The Xbox press is therefore also read straight from HID (`Input.onHomePressed`), and `summon()` de-duplicates within 0.8 s.
+16. **Changing a privacy permission (Screen Recording, Accessibility) makes macOS kill the app.** The Home button relaunches it, but in the relaunched copy the first `IOHIDManagerOpen` can fail, so it retries every 5 s.
+17. **The press that enters game mode must not count toward the 6-second exit hold.** `Input.ignoreCurrentHold()` ignores it until the button is released.
+14. **The D-pad hat's value range varies** (0–7 or 1–8). The code uses the element's logical min/max.
 11. **Save backups must never touch the game's files.** `backup-saves` only reads the sources and writes into its own folder. Each copy goes to `.incoming-<stamp>`, gets verified file-by-file (sizes), and then is renamed into place.
 
 ---
@@ -143,7 +204,8 @@ Do these once on a new Mac, in this order.
 2. **Bottle D: drive:** `ln -sfn /Volumes/circular "~/Library/Application Support/CrossOver/Bottles/Steam/dosdevices/d:"`. Then, in the bottle's Steam, go to Settings › Storage › Add Drive › `D:` so installs go to the games drive and not the 256 GB internal disk.
 3. **Mac Steam.** Install it and sign in once, which creates `~/Library/Application Support/Steam/userdata/<id>/`. **Remove Mac Steam from Login Items** (System Settings › General › Login Items). Otherwise its windows pop up at every boot.
 4. **Build and install:** `./build.sh`, which puts the app at `/Applications/Console Mode.app`.
-5. **Controller home button:** System Settings › **Game Controllers** › *Xbox Wireless Controller* › **Home button** → open app → **Console Mode**.
+5. **Accessibility** (for instant start): System Settings › Privacy & Security › **Accessibility** › enable **Console Mode**. Console Mode shows the system prompt on its first non-standby launch.
+5b. **Controller home button:** System Settings › **Game Controllers** › *Xbox Wireless Controller* › **Home button** → open app → **Console Mode**.
 6. **Screen Recording** for screenshots: System Settings › Privacy & Security › **Screen & System Audio Recording** › add and enable **Console Mode**.
 7. The **watchdog LaunchAgent** installs itself on the first launch (`~/Library/LaunchAgents/local.consolemode.watchdog.plist`).
 8. *(Optional)* **Focus while gaming:** create two Shortcuts named exactly **`Console Mode On`** (Set Focus › Do Not Disturb › On) and **`Console Mode Off`** (… › Off).
@@ -241,7 +303,16 @@ If `frozen.json` exists and no `ConsoleMode` process is running, it sends SIGCON
 - `add-game` round-trip through Mac Steam, and `--sync` / `--check` against a fake bottle library
 - Native Big Picture at 52–60 fps navigating (measured over the DevTools protocol, `tools/prof.js`)
 
+**Verified in round 2 (without the owner's hands):**
+- All new modules compile, and standby starts cleanly (0% CPU, 35 MB, Steam preloaded invisibly, login agents installed).
+- `gamePIDs` finds a Wine-style process with spaces in its path; suspend → `T`, resume → `S`.
+- bottle-launch: a suspended tile's Play turns into `resume-request`; a fresh launch writes `launching` with the correct 64-bit-derived shortcut id.
+- `backup-saves` round trip in a fake home: snapshot → change → restore oldest → undo via `before-restore`, the same-second name collision, and refusing to restore into `/etc`.
+- Preview renders reviewed: launch screen, Now Playing (and suspended), Save Rewind (and confirm dialog).
+- Warm Big Picture reopen 0.4–0.7 s, cold 5 s (measured).
+
 **Not verified yet:**
+- Anything needing the owner's controller or permissions: the instant restore through Accessibility, Quick Resume and force quit on a real game, Save Rewind with a controller, the battery reading from the Xbox controller, Now Playing with a real game's art, audio routing (only "Mac mini Speakers" exists today), and a Remote Play session.
 - **Screenshot** (Xbox + View): the combo fires, but files only appear once Screen Recording is granted (section 5, step 6). The stable signature was added for exactly this; confirm it.
 - **Launching a real bottle game from a Mac Steam tile**, including game-to-front and return-to-Big-Picture with a real game. It was tested with a stand-in Windows program (Notepad) in an earlier version.
 - Whether **Mac Steam's Steam Input** also acts on the controller while a bottle game runs (double input). If it does: tile › Properties › Controller › disable Steam Input.
@@ -277,4 +348,4 @@ Build requirements: Xcode Command Line Tools (`swiftc`, Swift 6 toolchain in Swi
 - The console look must never show on the play screen; other screens are taken over, never switched off.
 - Pausing apps is fine even when it drops their connections ("nuclear is fine"). Nothing stays running during games (no Discord or music exceptions).
 - Don't pop test windows (e.g. Notepad stand-ins) on the owner's screen without saying so.
-- The Cyberpunk entry in the bottle's Steam is a non-Steam shortcut to a repack at `/Volumes/circular/Games/unpacked/…`. The previous assistant declined to launch it or add it as a tile; the owner can add any exe themselves with `add-game`.
+- Only add games the owner has a right to play. The assistant doesn't add or launch pirated copies; `add-game` is there for the owner's own games.

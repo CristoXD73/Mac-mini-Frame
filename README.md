@@ -1,66 +1,80 @@
-# Mac-mini-Frame
+# Mac-mini-Frame: Console Mode
 
-Turns a Mac mini into a game console you drive entirely with a controller. The app it builds is **Console Mode**. It uses native Mac Steam Big Picture as the menu, and the Windows games themselves run in a **CrossOver bottle**.
+Turns a Mac into a controller-driven game console. Press the Xbox button and the Mac becomes a console:
+- other apps are paused and hidden;
+- extra displays show an animated starfield (or a Now Playing card);
+- a GPU-rendered Steam Big Picture comes up;
+- Windows games run through CrossOver as regular tiles.
 
-| Controller | What happens |
+Hold the Xbox button 6 seconds to go back to the desktop.
+
+![Console Mode screens](docs/images/takeover-frames.jpg)
+
+## Install
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/install.sh | zsh
+```
+
+This downloads the source to `~/Mac-mini-Frame`, builds it, installs **Console Mode** to `/Applications` and starts it in the background. Run it again to update. From a checkout, `./install.sh` does the same.
+
+**Needs:** macOS 15+, Apple's Command Line Tools (the installer offers them), [Steam for Mac](https://store.steampowered.com), and [CrossOver](https://www.codeweavers.com/crossover) with a bottle named **`Steam`** for Windows games.
+
+**One-time setup** (System Settings):
+
+| Setting | Why |
 |---|---|
-| **Press Xbox button** | **Game mode.** Other apps are hidden and paused. Every display except the main one shows an animated starfield. Mac Steam opens in Big Picture on the main display, and your bottle games appear there as tiles |
-| Press again | Brings Big Picture, or the running game, back to the front |
-| **Hold Xbox button 6 s** | **Back to PC.** The game and both Steam clients close, apps resume, and the starfield goes away. A countdown shows from 2 s |
-| Xbox + D-pad up/down | Volume ±6% |
-| Xbox + Y | CPU / GPU / RAM / clock overlay |
-| Xbox + View | Screenshot to `~/Pictures/Console Mode/` |
+| Game Controllers › your controller › **Home button → Console Mode** | the Xbox button opens it |
+| Privacy & Security › **Accessibility** → Console Mode | instant (≈1 s) start |
+| Privacy & Security › **Screen & System Audio Recording** → Console Mode | screenshots |
+| General › Login Items › remove **Steam** | Console Mode starts Steam quietly itself |
 
-When a game closes, the save folders it changed are backed up (and verified) to `/Volumes/Storage/Console Mode/Save Backups/`.
-
-## Why not the bottle's own Big Picture?
-
-Windows Steam detects macOS and starts its interface with `--disable-gpu`, and nothing outside Steam can change that. In the bottle, Big Picture navigates at **12–20 fps**. Native Mac Steam Big Picture runs at **52–60 fps**. So Mac Steam is the menu, and each tile starts the game inside the bottle through `bottle-launch`. The details, and what was already tried, are in [docs/HANDOFF.md §4](docs/HANDOFF.md).
-
-## Setup
-
-You need macOS 15+, Xcode Command Line Tools, CrossOver with GPTK4/D3DMetal, a bottle named `Steam` with Windows Steam installed, and Mac Steam signed in to the same account. Paths are set for the original Mac. [HANDOFF §9](docs/HANDOFF.md) lists the constants to change on a different machine.
+## Uninstall
 
 ```bash
-git clone -b claude/steam-console-macos-perf-4lbx1k https://github.com/CristoXD73/Pergolas.git Mac-mini-Frame
-cd Mac-mini-Frame
-./build.sh                     # builds and installs /Applications/Console Mode.app
+curl -fsSL https://raw.githubusercontent.com/CristoXD73/Pergolas/claude/steam-console-macos-perf-4lbx1k/uninstall.sh | zsh
 ```
 
-Then configure these once:
+What it removes:
+- the app and its background agents;
+- only the Steam tiles Console Mode added.
 
-1. Set **System Settings › Game Controllers › (your controller) › Home button** to open **Console Mode**.
-2. Turn on **System Settings › Privacy & Security › Screen & System Audio Recording** for Console Mode (needed for screenshots).
-3. Remove Mac Steam from **Login Items**.
-4. Optional: map the games drive as the bottle's `D:` and add it as a library in the bottle's Steam. See [HANDOFF §5](docs/HANDOFF.md) for this and the rest of the one-time setup.
+What it keeps:
+- your save backups;
+- your games, bottle and own shortcuts.
 
-Games installed in the bottle's Steam become Mac Steam tiles automatically each time game mode starts. To add any other Windows game:
+To also delete internal-drive backups, settings and logs, run `~/Mac-mini-Frame/uninstall.sh --purge`, or append `-s -- --purge` to the one-liner.
 
-```bash
-R="/Applications/Console Mode.app/Contents/Resources"
-python3 "$R/add-game" "My Game" exe "/Volumes/circular/Games/MyGame/game.exe"   # Mac Steam must be closed
-python3 "$R/add-game" --list
-```
+## Using it
 
-## Layout
-
-| Path | What |
+| Controller | Action |
 |---|---|
-| `src/` | The Swift app: `main` (state machine), `Input` (HID + GameController), `Freezer` (pause/resume + watchdog), `Takeover` (starfield), `Overlays`, `Power`, `Common` |
-| `resources/` | Scripts bundled into the app: `bottle-launch`, `bottle-windows`, `add-game`, `backup-saves`, `watchdog` |
-| `tools/` | `hidprobe.swift` (raw controller buttons), `render-preview.swift` (takeover frames to JPEG), `cdp.js`/`prof.js` (Big Picture fps over DevTools) |
-| `tests/` | Tests for the scripts using a fake bottle, fake Mac Steam and fake wine |
-| `docs/HANDOFF.md` | The full design, hard-won findings, and what is and isn't verified |
-| `docs/AI-HANDOFF.md` | Current status, repo access, and next steps for whoever picks this up |
+| **Xbox** | game mode: Big Picture, apps paused, other screens taken over |
+| **Hold Xbox 6 s** | back to the desktop |
+| Xbox + **D-pad ↑↓** | volume (hold to repeat) |
+| Xbox + **Y** | CPU / GPU / RAM / storage overlay |
+| Xbox + **View** | screenshot → `~/Pictures/Console Mode` |
+| Xbox + **X** | Quick Resume: suspend or resume the game |
+| Xbox + **Menu + View** (twice) | force quit the game |
+| Xbox + **LB** | Save Rewind: roll a game's saves back to an earlier point |
 
-## Tests
+**Adding games:**
+- **Installed through the bottle's Steam:** they appear as tiles automatically, with cover art.
+- **Any other Windows game you own:** quit Mac Steam, then run
+  ```bash
+  "/Applications/Console Mode.app/Contents/Resources/add-game" "Game Name" exe "/path/to/Game.exe"
+  ```
+  It shows up in Big Picture › Library › **Non-Steam**.
 
-```bash
-python3 -m unittest discover -s tests -p 'test_*.py'   # add-game, backup-saves
-bash tests/test_scripts.sh                             # bottle-launch, watchdog
-./build.sh --no-install                                # compile the app (macOS only)
+**Settings** (optional) go in `~/Library/Application Support/Console Mode/config.json`:
+```json
+{ "gamesDrive": "/Volumes/Games", "backupDest": "/Volumes/Backup/Console Mode/Save Backups",
+  "keepSteamLoaded": true, "nowPlaying": true, "gamingAudioOutput": "LG TV", "lowStorageGB": 50 }
 ```
 
-On every push, CI compiles the app on macOS 15, checks the signing requirement, renders a preview of the takeover animation (downloadable as a CI artifact), and runs the tests on macOS and Linux.
+## Docs
 
-Logs are written to `~/Library/Logs/ConsoleMode.log`.
+- [`docs/HANDOFF.md`](docs/HANDOFF.md): full design, every hard-won finding, setup and test status.
+- [`docs/AI-HANDOFF.md`](docs/AI-HANDOFF.md): state of the repo for the next AI or developer.
+
+Build from source: `./build.sh` (`--no-install` to only build). Tests: `zsh tests/test_scripts.sh`.
