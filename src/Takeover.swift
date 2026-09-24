@@ -169,10 +169,11 @@ struct TakeoverView: View {
                 let p = q / life
                 let sx = size.width * (0.25 + 0.7 * hash01(n, 1)), sy = size.height * (0.05 + 0.35 * hash01(n, 2))
                 let angle = CGFloat(Double.pi * (0.72 + 0.12 * hash01(n, 3)))  // heading down-left
-                let travel = size.width * 0.35
-                let head = CGPoint(x: sx + cos(angle) * travel * p, y: sy + sin(angle) * travel * p)
-                let tailLen = 220 * unit * min(1, p * 3)
-                let tail = CGPoint(x: head.x - cos(angle) * tailLen, y: head.y - sin(angle) * tailLen)
+                let travel: CGFloat = size.width * 0.35
+                let ca: CGFloat = CGFloat(Foundation.cos(Double(angle))), sa: CGFloat = CGFloat(Foundation.sin(Double(angle)))
+                let head = CGPoint(x: sx + ca * travel * CGFloat(p), y: sy + sa * travel * CGFloat(p))
+                let tailLen: CGFloat = 220 * unit * CGFloat(min(1, p * 3))
+                let tail = CGPoint(x: head.x - ca * tailLen, y: head.y - sa * tailLen)
                 var trail = Path(); trail.move(to: tail); trail.addLine(to: head)
                 let fade = p < 0.8 ? 1 : (1 - p) / 0.2
                 gc.stroke(trail, with: .linearGradient(Gradient(colors: [.clear, .white.opacity(0.9 * fade)]), startPoint: tail, endPoint: head),
