@@ -23,6 +23,11 @@ struct Config {
     /// Keep Mac Steam loaded (invisible) after "back to PC" so the next Xbox press opens in ~1 s.
     /// false = quit Steam completely on exit (next start ~3-5 s).
     var keepSteamLoaded = true
+    /// Extra apps game mode must never pause (substrings of their path or name), on top of the
+    /// built-in screen-mirroring / remote-display list in Freezer.swift.
+    var neverPause: [String] = []
+    /// Put the starfield on a Sidecar iPad or AirPlay display too. Off: those stay usable.
+    var takeoverSidecar = false
 
     static func load() -> Config {
         var c = Config()
@@ -33,6 +38,8 @@ struct Config {
         c.lowStorageGB = (j["lowStorageGB"] as? NSNumber)?.doubleValue ?? c.lowStorageGB
         c.rewindSnapshots = j["rewindSnapshots"] as? Bool ?? c.rewindSnapshots
         c.keepSteamLoaded = j["keepSteamLoaded"] as? Bool ?? c.keepSteamLoaded
+        c.neverPause = j["neverPause"] as? [String] ?? c.neverPause
+        c.takeoverSidecar = j["takeoverSidecar"] as? Bool ?? c.takeoverSidecar
         return c
     }
 }

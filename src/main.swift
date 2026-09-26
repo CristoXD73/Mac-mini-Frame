@@ -45,6 +45,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     var lastSummon = Date.distantPast
     var recentPresses: [Date] = []               // fallback exit when holds can't be detected
     var previousFront: NSRunningApplication?     // the app you were using before game mode
+    var keepOnMainUntil = Date.distantPast       // keep checking the new game is on the main display
     var ignoreGamesUntil = Date.distantPast      // a game still closing after "back to PC" isn't a new game
     var pendingGameSince: Date?                  // game found, but its window isn't on this Space yet
     var scootingSince: Date?                     // "Scooting over…" is showing; the Space switch follows
@@ -167,6 +168,8 @@ final class Controller: NSObject, NSApplicationDelegate {
         config = Config.load()
         log("entering game mode (\(input.lastPad.rawValue) controller)")
         takeover.nowPlayingEnabled = config.nowPlaying
+        takeover.includeSidecar = config.takeoverSidecar
+        freezer.neverPause = config.neverPause
         takeover.show(pad: input.lastPad)
         NSApp.presentationOptions = [.autoHideDock, .autoHideMenuBar]
         power.enterGameMode()
@@ -295,6 +298,7 @@ final class Controller: NSObject, NSApplicationDelegate {
             let name = (session?.state == "launching" || session?.state == "playing") ? session!.name : g.replacingOccurrences(of: ".exe", with: "")
             model.nowPlaying = NowPlaying(name: name, started: gameStartedAt!, suspended: false, art: session.map(gameArt) ?? GameArt())
             bringToFront(g)
+            keepOnMainUntil = Date().addingTimeInterval(12)   // games can resize or reopen their window at start
             // Drop the launch screen once the game is in front, after the Space slide if there was one.
             DispatchQueue.main.asyncAfter(deadline: .now() + (scooted ? 0.9 : 0.3)) { [weak self] in self?.launchScreen.hide() }
         } else if game == nil, let g = inGame, !suspended, !isRunning(g) {
@@ -303,6 +307,12 @@ final class Controller: NSObject, NSApplicationDelegate {
             inGame = nil
             model.nowPlaying = nil
             if gameMode { showBigPicture() }
+        }
+
+        // With a Sidecar iPad or another screen extending the desktop, make sure the game is on the
+        // main display (a few checks while it starts; it may reopen its window).
+        if let g = inGame, !suspended, Date() < keepOnMainUntil, Int(Date().timeIntervalSince1970 * 4) % 4 == 0 {
+            if keepOnMainDisplay(g) { bringToFront(g) }
         }
 
         // Save Rewind: snapshot saves every time they change while playing.
@@ -392,7 +402,9 @@ final class Controller: NSObject, NSApplicationDelegate {
                 }
             }
         case .volumeUp, .volumeDown:
-            hud.volume(Volume.step(c == .volumeUp ? 1 : -1))
+            // Hardware volume when the output has one; otherwise (TV over HDMI…) Console Mode's own.
+            let dir = c == .volumeUp ? 1 : -1
+            hud.volume(Volume.step(dir) ?? (gameMode ? SoftVolume.shared.step(dir) : nil))
         case .stats:
             stats.toggle()
         case .suspend:
@@ -470,6 +482,7 @@ final class Controller: NSObject, NSApplicationDelegate {
 
     /// Resume paused apps, show hidden ones, drop the overlays. Safe to call more than once.
     func restoreDesktop() {
+        SoftVolume.shared.stop()
         freezer.resume()
         hidden.forEach { $0.unhide() }
         hidden = []
@@ -516,6 +529,40 @@ final class Controller: NSObject, NSApplicationDelegate {
         case "nav":
             let map: [String: Nav] = ["left": .left, "right": .right, "up": .up, "down": .down, "a": .a, "b": .b]
             if let n = map[parts.count > 1 ? parts[1] : ""] { input.simulateNav(n) }
+        case "plan":
+            // Dry run: what game mode would do right now, without doing it.
+            let cands = freezer.candidates()
+            let cfg = Config.load()
+            takeover.includeSidecar = cfg.takeoverSidecar
+            let out = Audio.defaultOutput()
+            let plan: [String: Any] = [
+                "wouldPause": cands.count,
+                "wouldPauseNames": Set(cands.map { URL(fileURLWithPath: $0.path).lastPathComponent }).sorted(),
+                "wouldPauseMirroring": cands.filter { p in (neverPauseBuiltIn + cfg.neverPause).contains { p.path.lowercased().contains($0.lowercased()) } }.map(\.path),
+                "screens": NSScreen.screens.map { ["name": $0.localizedName, "frame": NSStringFromRect($0.frame), "sidecarOrAirPlay": isSidecarOrAirPlay($0)] },
+                "takeoverScreens": takeover.takeoverScreens().map(\.localizedName),
+                "audioOutput": out.flatMap { id in Audio.outputs().first { $0.id == id }?.name } ?? "",
+                "hardwareVolume": Volume.level().map { Double($0) } ?? -1,
+                "softVolumeWouldBeUsed": Volume.level() == nil,
+                "softVolumeLevel": Double(SoftVolume.shared.level),
+            ]
+            if parts.count > 1, let d = try? JSONSerialization.data(withJSONObject: plan, options: [.sortedKeys, .prettyPrinted]) {
+                try? d.write(to: URL(fileURLWithPath: parts[1]))
+            }
+        case "softvolset":
+            SoftVolume.shared.setForTest(Float(parts.count > 1 ? parts[1] : "1") ?? 1)
+                case "softvoltest":
+            // Starts the software volume at the current level for 3 s and reports whether audio flows
+            // through it (callbacks, peak input level), then stops it. Plays nothing itself.
+            let ok = SoftVolume.shared.ensureRunning()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                var r = SoftVolume.shared.diagnostics()
+                r["started"] = ok; r["output"] = SoftVolume.shared.outputUID ?? ""; r["level"] = Double(SoftVolume.shared.level)
+                if !self.gameMode { SoftVolume.shared.stop() }
+                if parts.count > 1, let d = try? JSONSerialization.data(withJSONObject: r, options: [.sortedKeys]) {
+                    try? d.write(to: URL(fileURLWithPath: parts[1]))
+                }
+            }
         case "dump":
             let screens = NSScreen.screens.count
             let state: [String: Any] = [

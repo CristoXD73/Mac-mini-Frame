@@ -317,6 +317,7 @@ final class Takeover {
     private(set) var pad: Pad = .xbox
     private var start = Date()
     var nowPlayingEnabled = true
+    var includeSidecar = false          // config "takeoverSidecar"
 
     init() {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
@@ -338,12 +339,18 @@ final class Takeover {
         windows = []
     }
 
+    /// Extra displays that get the starfield: never the main one, and not a Sidecar iPad or AirPlay
+    /// display (you're using those) unless "takeoverSidecar" is on. Mirrored displays share one screen.
+    func takeoverScreens() -> [NSScreen] {
+        let screens = NSScreen.screens
+        guard let main = screens.first else { return [] }
+        return screens.filter { $0 != main && (includeSidecar || !isSidecarOrAirPlay($0)) }
+    }
+
     private func rebuild() {
         windows.forEach { $0.orderOut(nil) }
         windows = []
-        let screens = NSScreen.screens
-        guard let main = screens.first else { return }
-        for screen in screens where screen != main {
+        for screen in takeoverScreens() {
             let w = NSWindow(contentRect: screen.frame, styleMask: [.borderless], backing: .buffered, defer: false, screen: screen)
             w.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()))   // above everything on that display
             w.backgroundColor = .black

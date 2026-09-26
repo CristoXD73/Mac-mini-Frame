@@ -83,6 +83,52 @@ func bringToFront(_ name: String) {
     log("bringToFront \(name): \(ok ? "ok" : "refused")")
 }
 
+// MARK: Displays (Sidecar, AirPlay, mirroring)
+
+/// A Sidecar iPad or an AirPlay display. macOS names them "Sidecar Display (AirPlay)", "… (AirPlay)".
+func isSidecarOrAirPlay(_ screen: NSScreen) -> Bool {
+    let n = screen.localizedName.lowercased()
+    return n.contains("sidecar") || n.contains("airplay")
+}
+
+/// Is a window (CGWindowList bounds: global, top-left origin) mostly on the main display?
+func isOnMainDisplay(_ bounds: CGRect) -> Bool {
+    let main = CGDisplayBounds(CGMainDisplayID())
+    let visible = bounds.intersection(main)
+    return !visible.isNull && visible.width * visible.height >= 0.5 * bounds.width * bounds.height
+}
+
+/// The game belongs on the main display (where Big Picture, the launch screen and the HUD are).
+/// With a Sidecar iPad or another screen extending the desktop, Wine can open it on the wrong one:
+/// move it over (Accessibility). Returns true if it had to move it.
+@MainActor
+@discardableResult
+func keepOnMainDisplay(_ owner: String) -> Bool {
+    guard AXIsProcessTrusted(), let app = NSWorkspace.shared.runningApplications.first(where: { $0.localizedName == owner }),
+          let info = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]]
+    else { return false }
+    let big = info.compactMap { w -> CGRect? in
+        guard (w[kCGWindowOwnerName as String] as? String) == owner, let d = w[kCGWindowBounds as String] as? NSDictionary,
+              let r = CGRect(dictionaryRepresentation: d), r.width >= 640, r.height >= 480 else { return nil }
+        return r
+    }
+    guard let r = big.first, !isOnMainDisplay(r) else { return false }
+    let main = CGDisplayBounds(CGMainDisplayID())
+    let el = AXUIElementCreateApplication(app.processIdentifier)
+    var windows: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(el, kAXWindowsAttribute as CFString, &windows) == .success, let list = windows as? [AXUIElement] else { return false }
+    var moved = false
+    for w in list {
+        var sizeRef: CFTypeRef?; var size = CGSize.zero
+        if AXUIElementCopyAttributeValue(w, kAXSizeAttribute as CFString, &sizeRef) == .success, let v = sizeRef { AXValueGetValue(v as! AXValue, .cgSize, &size) }
+        guard size.width >= 640 else { continue }
+        var origin = CGPoint(x: main.minX + max(0, (main.width - size.width) / 2), y: main.minY + max(0, (main.height - size.height) / 2))
+        if let pos = AXValueCreate(.cgPoint, &origin), AXUIElementSetAttributeValue(w, kAXPositionAttribute as CFString, pos) == .success { moved = true }
+    }
+    log("game \(owner) was on another display (\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))x\(Int(r.height))): \(moved ? "moved to the main display" : "could not move it")")
+    return moved
+}
+
 // Owner of a large window from the bottle that isn't Steam itself. Includes windows that aren't on
 // the current Space: Wine puts full-screen games in their own Space, and activating the game (what
 // bringToFront does) switches to it.

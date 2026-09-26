@@ -26,6 +26,15 @@ let protectedPrefixes = [
     "/Applications/Console Mode.app",
 ]
 
+/// Screen mirroring and remote-display apps (Sidecar and AirPlay themselves are part of macOS and
+/// already protected above). Pausing these would freeze the iPad, TV or remote screen you play on.
+/// Matched case-insensitively against the process path; config "neverPause" adds more.
+let neverPauseBuiltIn = [
+    "sidecar", "airplay", "universalcontrol", "screencontinuity",
+    "duet", "luna display", "airserver", "reflector", "splashtop", "jump desktop", "parsec",
+    "sunshine", "moonlight", "screens 5", "screens for", "deskreen", "spacedesk", "chrome remote desktop",
+]
+
 struct Proc { let pid: pid_t; let ppid: pid_t; let path: String }
 
 func userProcesses() -> [Proc] {
@@ -47,6 +56,7 @@ func userProcesses() -> [Proc] {
 @MainActor
 final class Freezer {
     private(set) var frozen: [pid_t] = []
+    var neverPause: [String] = []       // config "neverPause"
     var isFrozen: Bool { !frozen.isEmpty }
 
     /// What would be paused right now (used by freeze and for dry runs).
@@ -54,11 +64,13 @@ final class Freezer {
         let procs = userProcesses()
         let me = getpid()
         let byPid = Dictionary(procs.map { ($0.pid, $0) }, uniquingKeysWith: { a, _ in a })
+        let keep = (neverPauseBuiltIn + neverPause.map { $0.lowercased() }).filter { !$0.isEmpty }
         func isProtected(_ p: Proc) -> Bool {
             // Walk up the parent chain: protected if it, or anything that launched it, is protected.
             var cur: Proc? = p, hops = 0
             while let c = cur, hops < 64 {
                 if c.pid == me || protectedPrefixes.contains(where: { c.path.hasPrefix($0) })
+                    || keep.contains(where: { c.path.lowercased().contains($0) })
                     || (c.path as NSString).lastPathComponent == "claude" { return true }
                 if c.ppid <= 1 { return false }
                 cur = byPid[c.ppid]; hops += 1

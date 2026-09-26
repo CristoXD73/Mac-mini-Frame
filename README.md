@@ -31,6 +31,7 @@ Press the Xbox button and your Mac becomes a console. Hold it to get your deskto
 | ⏸️ **Quick Resume** | Xbox + X suspends the game completely (0% CPU). Press again to continue exactly where you were. |
 | ⏪ **Save Rewind** | Your saves are snapshotted while you play. Roll back to any point, and undo the rollback if you change your mind. |
 | 🔊 **Glass HUD** | Volume, screenshots and the exit ring in Apple's frosted-glass style. Nothing sits on screen while you play. |
+| 📱 **Sidecar & TVs** | Play with a Sidecar iPad or AirPlay mirroring: those displays and mirroring apps are never paused or covered, and the game stays on your main display. Xbox + D-pad sets the volume even on TVs and monitors macOS can't control (HDMI, DisplayPort). |
 | 🛟 **Safe by design** | Paused apps always come back, even if Console Mode crashes: a watchdog wakes them. It never installs mid-game. |
 
 <table>
@@ -196,7 +197,9 @@ Add `-s -- --purge` to the line above to also delete internal-drive backups, set
   "keepSteamLoaded": true,
   "nowPlaying": true,
   "gamingAudioOutput": "LG TV",
-  "lowStorageGB": 50
+  "lowStorageGB": 50,
+  "takeoverSidecar": false,
+  "neverPause": ["My Mirroring App"]
 }
 ```
 
@@ -208,6 +211,8 @@ Add `-s -- --purge` to the line above to also delete internal-drive backups, set
 | `nowPlaying` | show the Now Playing card on extra displays |
 | `gamingAudioOutput` | switch sound to this device in game mode |
 | `lowStorageGB` | warn when a drive has less free space than this |
+| `takeoverSidecar` | also put the starfield on a Sidecar iPad or AirPlay display (off: they stay usable) |
+| `neverPause` | extra apps game mode must never pause (screen-mirroring and remote-display apps are already kept) |
 
 ---
 
