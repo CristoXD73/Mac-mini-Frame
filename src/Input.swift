@@ -169,7 +169,7 @@ final class Input {
                     me.hidHomeDown = down
                     log("hid: Xbox button \(down ? "down" : "up") (interface \(Unmanaged.passUnretained(device).toOpaque()))")
                 }
-                else if down && me.homeHeld { me.cancelHold() }   // any other button cancels the countdown
+                else if down && me.homeHeld { me.cancelHold("button \(usage)") }   // another button cancels the countdown (before the ring)
             }
         }, Unmanaged.passUnretained(self).toOpaque())
         IOHIDManagerRegisterDeviceRemovalCallback(mgr, { ctx, _, _, device in
@@ -235,9 +235,14 @@ final class Input {
     /// Test channel: navigation input for a Console Mode screen.
     func simulateNav(_ n: Nav) { if let sink = navSink { sink(n) } }
 
-    private func cancelHold() {
+    private func cancelHold(_ why: String = "another button") {
         guard homeHeld else { return }     // only a button pressed *during* a hold cancels it
-        if !comboUsedThisHold { onHoldCancelled() }
+        // Once the exit ring is showing, the player means to leave: other buttons (a combo, a tap
+        // on A/B while nothing seems to happen) no longer cancel it.
+        if let s = holdStart, Date().timeIntervalSince(s) >= holdRingDelay {
+            log("hold: \(why) pressed during the exit hold, ignored (ring already showing)"); return
+        }
+        if !comboUsedThisHold { onHoldCancelled(); log("hold: cancelled by \(why)") }
         comboUsedThisHold = true
     }
 

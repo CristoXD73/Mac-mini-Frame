@@ -45,6 +45,7 @@ final class Controller: NSObject, NSApplicationDelegate {
     var lastSummon = Date.distantPast
     var recentPresses: [Date] = []               // fallback exit when holds can't be detected
     var previousFront: NSRunningApplication?     // the app you were using before game mode
+    var launchStalled: Double?                   // session whose game never opened its window (launch screen dropped)
     var keepOnMainUntil = Date.distantPast       // keep checking the new game is on the main display
     var ignoreGamesUntil = Date.distantPast      // a game still closing after "back to PC" isn't a new game
     var pendingGameSince: Date?                  // game found, but its window isn't on this Space yet
@@ -281,7 +282,27 @@ final class Controller: NSObject, NSApplicationDelegate {
 
         // Launch screen: up from Play until Console Mode hands off to the game (below), or the launch
         // ends / times out. Not closed when bottle-launch says "playing": the window may not be visible yet.
-        if gameMode, inGame == nil, let s = session, s.state == "launching" || (s.state == "playing" && found != nil),
+        // A game that runs but never opens its main window (a hidden dialog, a display it doesn't like…)
+        // would sit behind the launch screen forever: after 25 s drop the screen, show whatever the game
+        // has open, and log its windows so the cause is on record.
+        if gameMode, inGame == nil, found == nil, let s = session, launchStalled != s.time,
+           s.state == "launching" || s.state == "playing", Date().timeIntervalSince1970 - s.time > 25,
+           let app = NSWorkspace.shared.runningApplications.first(where: { let n = ($0.localizedName ?? "").lowercased(); return n.hasSuffix(".exe") && !notGames.contains(n) }) {
+            launchStalled = s.time
+            launchScreen.hide()
+            let name = app.localizedName ?? "game"
+            let wins = (CGWindowListCopyWindowInfo([.optionAll, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? [])
+                .filter { ($0[kCGWindowOwnerName as String] as? String) == name }
+                .map { w -> String in
+                    let b = w[kCGWindowBounds as String] as? [String: CGFloat] ?? [:]
+                    return "\(Int(b["Width"] ?? 0))x\(Int(b["Height"] ?? 0))@\(Int(b["X"] ?? 0)),\(Int(b["Y"] ?? 0)) layer \(w[kCGWindowLayer as String] as? Int ?? 0) \((w[kCGWindowIsOnscreen as String] as? Bool ?? false) ? "on" : "off")screen \"\(w[kCGWindowName as String] as? String ?? "")\""
+                }
+            let main = CGDisplayBounds(CGMainDisplayID())
+            log("launch stalled: \(name) running 25 s without a game window (main display \(Int(main.width))x\(Int(main.height))); its windows: \(wins.isEmpty ? "none" : wins.joined(separator: " | "))")
+            bringToFront(name)
+            hud.message("exclamationmark.circle.fill", "\(s.name) hasn't opened its window yet · hold Xbox to go back", for: 6)
+        }
+        if gameMode, inGame == nil, let s = session, launchStalled != s.time, s.state == "launching" || (s.state == "playing" && found != nil),
            Date().timeIntervalSince1970 - s.time < 180 {
             launchScreen.show(s)
         } else if launchScreen.showingFor != nil, inGame == nil,
